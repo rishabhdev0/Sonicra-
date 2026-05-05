@@ -19,7 +19,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <ClerkProvider>
       <TRPCReactProvider>
-        <html lang="en" suppressHydrationWarning>
+        <html lang="en" suppressHydrationWarning className="light">
           <body className={`${inter.variable} ${geistMono.variable} antialiased`}>
             <ThemeProvider>
               <NuqsAdapter>{children}</NuqsAdapter>
