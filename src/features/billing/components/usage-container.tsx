@@ -120,7 +120,6 @@ function ActiveSubscriptionCard({
   );
 }
 
-// ✅ Loading skeleton — fixes the flicker on refresh
 function UsageSkeleton() {
   return (
     <div className="space-y-3">
@@ -139,11 +138,10 @@ function UsageSkeleton() {
 
 export function UsageContainer() {
   const trpc = useTRPC();
-  const { data, isLoading } = useQuery(
-    trpc.billing.getStatus.queryOptions({
-      refetchInterval: 30000, // ✅ auto-refresh every 30s
-    }),
-  );
+  const { data, isLoading } = useQuery({
+    ...trpc.billing.getStatus.queryOptions(),
+    refetchInterval: 30000,
+  });
 
   return (
     <div className="group-data-[collapsible=icon]:hidden mx-1 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
