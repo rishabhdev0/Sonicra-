@@ -8,6 +8,16 @@ import { uploadAudio } from "@/lib/r2";
 import { TEXT_MAX_LENGTH } from "@/features/text-to-speech/data/constants";
 import { createTRPCRouter, orgProcedure } from "../init";
 
+const FREE_TIER_LIMIT = 10000;
+
+async function getOrgCharacterUsage(orgId: string): Promise<number> {
+  const allGenerations = await prisma.generation.findMany({
+    where: { orgId },
+    select: { text: true },
+  });
+  return allGenerations.reduce((sum, g) => sum + g.text.length, 0);
+}
+
 export const generationsRouter = createTRPCRouter({
   getById: orgProcedure
     .input(z.object({ id: z.string() }))
@@ -29,7 +39,7 @@ export const generationsRouter = createTRPCRouter({
         audioUrl: `/api/audio/${generation.id}`,
       };
     }),
-  
+
   getAll: orgProcedure.query(async ({ ctx }) => {
     const generations = await prisma.generation.findMany({
       where: { orgId: ctx.orgId },
@@ -55,32 +65,45 @@ export const generationsRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ input, ctx }) => {
+
+      // ── Subscription + Free Tier Check ──────────────────────────────
       try {
         const customerState = await polar.customers.getStateExternal({
           externalId: ctx.orgId,
         });
         const hasActiveSubscription =
           (customerState.activeSubscriptions ?? []).length > 0;
+
         if (!hasActiveSubscription) {
+          // Not subscribed — check free tier usage
+          const totalUsed = await getOrgCharacterUsage(ctx.orgId);
+          if (totalUsed + input.text.length > FREE_TIER_LIMIT) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "SUBSCRIPTION_REQUIRED",
+            });
+          }
+        }
+        // If subscribed → allow through ✅
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        // Customer doesn't exist in Polar yet → check free tier
+        const totalUsed = await getOrgCharacterUsage(ctx.orgId);
+        if (totalUsed + input.text.length > FREE_TIER_LIMIT) {
           throw new TRPCError({
             code: "FORBIDDEN",
             message: "SUBSCRIPTION_REQUIRED",
           });
         }
-      } catch (err) {
-        if (err instanceof TRPCError) throw err;
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "SUBSCRIPTION_REQUIRED",
-        });
       }
+      // ────────────────────────────────────────────────────────────────
 
       const voice = await prisma.voice.findUnique({
         where: {
           id: input.voiceId,
           OR: [
             { variant: "SYSTEM" },
-            { variant: "CUSTOM", orgId: ctx.orgId, }
+            { variant: "CUSTOM", orgId: ctx.orgId },
           ],
         },
         select: {
@@ -196,12 +219,6 @@ export const generationsRouter = createTRPCRouter({
           message: "Failed to store generated audio",
         });
       }
-
-      // ✅ NOW WITH LOGGING so we can see what's happening
-      console.log("🔵 Sending Polar event:", {
-        orgId: ctx.orgId,
-        characters: input.text.length,
-      });
 
       polar.events
         .ingest({
