@@ -2,34 +2,16 @@
 
 import modal
 
-# Use this to add R2 tokens:
-# modal secret create cloudflare-r2 \
-#   AWS_ACCESS_KEY_ID=<r2-access-key-id> \
-#   AWS_SECRET_ACCESS_KEY=<r2-secret-access-key>
-
-# Use this to test locally:
-# modal run chatterbox_tts.py \
-#   --prompt "Hello from Chatterbox [chuckle]." \
-#   --voice-key "voices/system/<voice-id>"
-
-# Use this to test CURL:
-# curl -X POST "https://<your-modal-endpoint>/generate" \
-#   -H "Content-Type: application/json" \
-#   -H "X-Api-Key: <your-api-key>" \
-#   -d '{"prompt": "Hello from Chatterbox [chuckle].", "voice_key": "voices/system/<voice-id>"}' \
-#   --output output.wav
-
-# R2 cloud bucket mount (read-only, replaces Modal Volume)
 R2_BUCKET_NAME = "Sonicra"
 R2_ACCOUNT_ID = "3d93f9bb66f5b0e090c5091b"
 R2_MOUNT_PATH = "/r2"
 r2_bucket = modal.CloudBucketMount(
     R2_BUCKET_NAME,
-   bucket_endpoint_url="https://s3.us-east-005.backblazeb2.com",
+    bucket_endpoint_url="https://s3.us-east-005.backblazeb2.com",
     secret=modal.Secret.from_name("cloudflare-r2"),
     read_only=True,
 )
-# Modal setup
+
 image = modal.Image.debian_slim(python_version="3.10").uv_pip_install(
     "chatterbox-tts==0.1.6",
     "fastapi[standard]==0.124.4",
@@ -40,16 +22,13 @@ app = modal.App("chatterbox-tts", image=image)
 with image.imports():
     import io
     import os
+    import re
     from pathlib import Path
 
+    import torch
     import torchaudio as ta
     from chatterbox.tts_turbo import ChatterboxTurboTTS
-    from fastapi import (
-        Depends,
-        FastAPI,
-        HTTPException,
-        Security,
-    )
+    from fastapi import Depends, FastAPI, HTTPException, Security
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from fastapi.security import APIKeyHeader
@@ -67,9 +46,38 @@ with image.imports():
             raise HTTPException(status_code=403, detail="Invalid API key")
         return x_api_key
 
-    class TTSRequest(BaseModel):
-        """Request model for text-to-speech generation."""
+    def split_into_chunks(text: str, max_chars: int = 400) -> list[str]:
+        """Split text into chunks at sentence boundaries."""
+        # Split at sentence endings
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            # If single sentence is too long, split at commas
+            if len(sentence) > max_chars:
+                parts = re.split(r'(?<=,)\s+', sentence)
+                for part in parts:
+                    if len(current_chunk) + len(part) + 1 <= max_chars:
+                        current_chunk += (" " if current_chunk else "") + part
+                    else:
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                        current_chunk = part
+            elif len(current_chunk) + len(sentence) + 1 <= max_chars:
+                current_chunk += (" " if current_chunk else "") + sentence
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = sentence
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        return [c for c in chunks if c]
 
+    class TTSRequest(BaseModel):
         prompt: str = Field(..., min_length=1, max_length=5000)
         voice_key: str = Field(..., min_length=1, max_length=300)
         temperature: float = Field(default=0.8, ge=0.0, le=2.0)
@@ -111,6 +119,10 @@ class Chatterbox:
             allow_headers=["*"],
         )
 
+        @web_app.get("/health")
+        def health():
+            return {"status": "ok"}
+
         @web_app.post("/generate", responses={200: {"content": {"audio/wav": {}}}})
         def generate_speech(request: TTSRequest):
             voice_path = Path(R2_MOUNT_PATH) / request.voice_key
@@ -119,7 +131,6 @@ class Chatterbox:
                     status_code=400,
                     detail=f"Voice not found at '{request.voice_key}'",
                 )
-
             try:
                 audio_bytes = self.generate.local(
                     request.prompt,
@@ -138,6 +149,55 @@ class Chatterbox:
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to generate audio: {e}",
+                )
+
+        # ✅ NEW: Long text endpoint with chunking
+        @web_app.post("/generate-long", responses={200: {"content": {"audio/wav": {}}}})
+        def generate_long_speech(request: TTSRequest):
+            voice_path = Path(R2_MOUNT_PATH) / request.voice_key
+            if not voice_path.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Voice not found at '{request.voice_key}'",
+                )
+
+            try:
+                # Split text into chunks
+                chunks = split_into_chunks(request.prompt, max_chars=400)
+                
+                if not chunks:
+                    raise HTTPException(status_code=400, detail="No text to generate")
+
+                # Generate audio for each chunk
+                audio_tensors = []
+                for chunk in chunks:
+                    wav = self.model.generate(
+                        chunk,
+                        audio_prompt_path=str(voice_path),
+                        temperature=request.temperature,
+                        top_p=request.top_p,
+                        top_k=request.top_k,
+                        repetition_penalty=request.repetition_penalty,
+                        norm_loudness=request.norm_loudness,
+                    )
+                    audio_tensors.append(wav)
+
+                # ✅ Merge all chunks into one seamless audio
+                merged = torch.cat(audio_tensors, dim=-1)
+
+                # Save to buffer
+                buffer = io.BytesIO()
+                ta.save(buffer, merged, self.model.sr, format="wav")
+                buffer.seek(0)
+
+                return StreamingResponse(
+                    buffer,
+                    media_type="audio/wav",
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate long audio: {e}",
                 )
 
         return web_app

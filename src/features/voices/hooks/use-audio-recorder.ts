@@ -59,7 +59,7 @@ export function useAudioRecorder() {
       normalize: true,
     });
 
-    wsRef.current = ws
+    wsRef.current = ws;
 
     const record = ws.registerPlugin(
       RecordPlugin.create({
@@ -81,8 +81,8 @@ export function useAudioRecorder() {
       setAudioBlob(null);
       setElapsedTime(0);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: true
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
       });
       streamRef.current = stream;
 
@@ -123,15 +123,40 @@ export function useAudioRecorder() {
       const recorder = recorderRef.current;
       if (!recorder) return;
 
+      // ✅ Stop timer first
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
       recorder.stopRecording(() => {
+        // ✅ Get blob BEFORE destroying anything
         const blob = recorder.getBlob();
+
+        // ✅ Update state
         setAudioBlob(blob);
         setIsRecording(false);
-        cleanup();
+
+        // ✅ Stop mic stream
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+        }
+
+        // ✅ Destroy wavesurfer
+        destroyWaveSurfer();
+
+        // ✅ Call callback with blob
         onBlob?.(blob);
+
+        // ✅ Destroy recorder LAST
+        if (recorderRef.current) {
+          recorderRef.current.destroy();
+          recorderRef.current = null;
+        }
       });
     },
-    [cleanup],
+    [destroyWaveSurfer],
   );
 
   const resetRecording = useCallback(() => {
@@ -152,4 +177,4 @@ export function useAudioRecorder() {
     stopRecording,
     resetRecording,
   };
-};
+}

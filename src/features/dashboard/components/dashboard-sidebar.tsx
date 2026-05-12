@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OrganizationSwitcher, UserButton, useClerk } from "@clerk/nextjs";
-import { type LucideIcon, Home, LayoutGrid, AudioLines, Volume2, Settings, Headphones, Zap } from "lucide-react";
+import { type LucideIcon, Home, LayoutGrid, AudioLines, Volume2, Settings, Headphones, Zap, Wand2 } from "lucide-react";
 import Link from "next/link";
 import { UsageContainer } from "@/features/billing/components/usage-container";
 import { VoiceCreateDialog } from "@/features/voices/components/voice-create-dialog";
@@ -75,6 +75,7 @@ export function DashboardSidebar() {
   const mainItems: MenuItem[] = [
     { title: "Dashboard", url: "/", icon: Home },
     { title: "Text to Speech", url: "/text-to-speech", icon: AudioLines, badge: "New", badgeColor: "bg-blue-100 text-blue-600" },
+    { title: "AI Script Writer", url: "/script-writer", icon: Wand2, badge: "New", badgeColor: "bg-purple-100 text-purple-600" },
     { title: "Voice Library", url: "/voices", icon: LayoutGrid },
     { title: "Clone Voice", icon: Volume2, onClick: () => setVoiceDialogOpen(true), badge: "Beta", badgeColor: "bg-green-100 text-green-600" },
   ];

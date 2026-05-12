@@ -18,6 +18,66 @@ async function getOrgCharacterUsage(orgId: string): Promise<number> {
   return allGenerations.reduce((sum, g) => sum + g.text.length, 0);
 }
 
+async function generateAudio(
+  text: string,
+  voiceKey: string,
+  temperature: number,
+  topP: number,
+  topK: number,
+  repetitionPenalty: number,
+): Promise<ArrayBuffer> {
+  const isLongText = text.length > 400;
+
+  if (isLongText) {
+    // ✅ Use /generate-long for chunking + merging
+    const response = await fetch(
+      `${process.env.CHATTERBOX_API_URL}/generate-long`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.CHATTERBOX_API_KEY!,
+        },
+        body: JSON.stringify({
+          prompt: text,
+          voice_key: voiceKey,
+          temperature,
+          top_p: topP,
+          top_k: topK,
+          repetition_penalty: repetitionPenalty,
+          norm_loudness: true,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Chatterbox error: ${errorText}`);
+    }
+
+    return await response.arrayBuffer();
+  } else {
+    // ✅ Use original /generate for short text
+    const { data, error } = await chatterbox.POST("/generate", {
+      body: {
+        prompt: text,
+        voice_key: voiceKey,
+        temperature,
+        top_p: topP,
+        top_k: topK,
+        repetition_penalty: repetitionPenalty,
+        norm_loudness: true,
+      },
+      parseAs: "arrayBuffer",
+    });
+
+    if (error) throw new Error("Failed to generate audio");
+    if (!(data instanceof ArrayBuffer)) throw new Error("Invalid audio response");
+
+    return data;
+  }
+}
+
 export const generationsRouter = createTRPCRouter({
   getById: orgProcedure
     .input(z.object({ id: z.string() }))
@@ -75,7 +135,6 @@ export const generationsRouter = createTRPCRouter({
           (customerState.activeSubscriptions ?? []).length > 0;
 
         if (!hasActiveSubscription) {
-          // Not subscribed — check free tier usage
           const totalUsed = await getOrgCharacterUsage(ctx.orgId);
           if (totalUsed + input.text.length > FREE_TIER_LIMIT) {
             throw new TRPCError({
@@ -84,10 +143,8 @@ export const generationsRouter = createTRPCRouter({
             });
           }
         }
-        // If subscribed → allow through ✅
       } catch (err) {
         if (err instanceof TRPCError) throw err;
-        // Customer doesn't exist in Polar yet → check free tier
         const totalUsed = await getOrgCharacterUsage(ctx.orgId);
         if (totalUsed + input.text.length > FREE_TIER_LIMIT) {
           throw new TRPCError({
@@ -127,40 +184,32 @@ export const generationsRouter = createTRPCRouter({
         });
       }
 
-      const { data, error } = await chatterbox.POST("/generate", {
-        body: {
-          prompt: input.text,
-          voice_key: voice.r2ObjectKey,
-          temperature: input.temperature,
-          top_p: input.topP,
-          top_k: input.topK,
-          repetition_penalty: input.repetitionPenalty,
-          norm_loudness: true,
-        },
-        parseAs: "arrayBuffer",
-      });
-
       Sentry.logger.info("Generation started", {
         orgId: ctx.orgId,
         voiceId: input.voiceId,
         textLength: input.text.length,
+        isLong: input.text.length > 400,
       });
 
-      if (error) {
+      // ✅ Generate audio (short or long)
+      let audioData: ArrayBuffer;
+      try {
+        audioData = await generateAudio(
+          input.text,
+          voice.r2ObjectKey,
+          input.temperature,
+          input.topP,
+          input.topK,
+          input.repetitionPenalty,
+        );
+      } catch {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to generate audio",
         });
       }
 
-      if (!(data instanceof ArrayBuffer)) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Invalid audio response",
-        });
-      }
-
-      const buffer = Buffer.from(data);
+      const buffer = Buffer.from(audioData);
       let generationId: string | null = null;
       let r2ObjectKey: string | null = null;
 
