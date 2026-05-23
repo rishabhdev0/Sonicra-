@@ -27,7 +27,9 @@ const FORMAT_ICONS: Record<string, React.ReactNode> = {
 
 export function ScriptWriterView() {
   const router = useRouter();
-  const [selectedFormat, setSelectedFormat] = useState(SCRIPT_FORMATS[0].id);
+ const [selectedFormat, setSelectedFormat] = useState<string>(
+  SCRIPT_FORMATS[0].id
+);
   const [details, setDetails] = useState("");
   const [script, setScript] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
