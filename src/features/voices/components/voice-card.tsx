@@ -75,25 +75,25 @@ export function VoiceCard({ voice }: VoiceCardProps) {
   );
 
   return (
-    <div className="flex items-center gap-1 overflow-hidden rounded-xl border pr-3 lg:pr-6">
-      <div className="relative h-24 w-20 shrink-0 lg:h-30 lg:w-24">
-        <div className="absolute left-0 top-0 h-24 w-10 border-r bg-muted/50 lg:h-30 lg:w-12" />
+    <div className="flex min-h-24 items-center gap-2 overflow-hidden rounded-lg border bg-card pr-3 transition-colors hover:border-primary/30 hover:bg-accent/15 lg:pr-4">
+      <div className="relative h-24 w-20 shrink-0 lg:w-22">
+        <div className="absolute inset-y-0 left-0 w-10 border-r bg-muted/60 lg:w-11" />
 
         <div className="absolute inset-0 flex items-center justify-center">
           <VoiceAvatar
             seed={voice.id}
             name={voice.name}
-            className="size-14 border-[1.5px] border-white shadow-xs lg:size-18"
+            className="size-14 border-[1.5px] border-card shadow-sm lg:size-16"
           />
         </div>
 
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-1.5 lg:gap-3">
-        <div className="flex items-center gap-1.5 line-clamp-1 text-sm font-medium tracking-tight">
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex items-center gap-1.5 line-clamp-1 text-sm font-medium">
           {voice.name}
           <span className="size-1 shrink-0 rounded-full bg-muted-foreground/50" />
-          <span className="text-[#327c88]">
+          <span className="text-primary">
             {VOICE_CATEGORY_LABELS[voice.category]}
           </span>
         </div>
@@ -112,9 +112,10 @@ export function VoiceCard({ voice }: VoiceCardProps) {
         <Button
           variant="outline"
           size="icon-sm"
-          className="rounded-full"
+          className="rounded-md bg-background"
           onClick={togglePlay}
           disabled={isLoading}
+          title={isPlaying ? "Pause preview" : "Play preview"}
         >
           {isLoading ? (
             <Spinner className="size-4" />
@@ -129,7 +130,8 @@ export function VoiceCard({ voice }: VoiceCardProps) {
             <Button 
               variant="outline" 
               size="icon-sm" 
-              className="rounded-full"
+              className="rounded-md bg-background"
+              title="Voice actions"
             >
               <MoreHorizontal className="size-4" />
             </Button>

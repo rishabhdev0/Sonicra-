@@ -27,16 +27,20 @@ export function TextInputPanel() {
   const isValid = useStore(form.store, (s) => s.isValid);
 
   return (
-    <div className="flex h-full min-h-0 flex-col flex-1">
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-card">
       {/* Text input area */}
       <div className="relative min-h-0 flex-1">
+        <div className="absolute inset-x-0 top-0 z-10 flex h-11 items-center justify-between border-b bg-card px-4 lg:px-6">
+          <p className="text-[11px] font-semibold uppercase text-muted-foreground">Script</p>
+          <p className="text-[11px] text-muted-foreground">Up to {TEXT_MAX_LENGTH.toLocaleString()} characters</p>
+        </div>
         <form.Field name="text">
           {(field) => (
             <Textarea
               value={field.state.value}
               onChange={(e) => field.handleChange(e.target.value)}
               placeholder="Start typing or paste your text here..."
-              className="absolute inset-0 resize-none border-0 bg-transparent p-4 pb-6 lg:p-6 lg:pb-8 text-base! leading-relaxed tracking-tight shadow-none wrap-break-word focus-visible:ring-0"
+              className="absolute inset-0 resize-none border-0 bg-transparent px-4 pb-6 pt-15 text-[15px]! leading-7 shadow-none wrap-break-word focus-visible:ring-0 lg:px-6 lg:pb-8 lg:pt-16"
               maxLength={TEXT_MAX_LENGTH}
               disabled={isSubmitting}
             />
@@ -46,7 +50,7 @@ export function TextInputPanel() {
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-background to-transparent" />
       </div>
       {/* Action bar */}
-      <div className="shrink-0 p-4 lg:p-6">
+      <div className="shrink-0 border-t bg-background/55 p-4 lg:px-6 lg:py-4">
         {/* Mobile layout */}
         <div className="flex flex-col gap-3 lg:hidden">
           <div className="flex items-center gap-2">
@@ -75,7 +79,7 @@ export function TextInputPanel() {
               </span>
             </Badge>
             <div className="flex items-center gap-3">
-              <p className="text-xs tracking-tight">
+              <p className="text-xs">
                 {text.length.toLocaleString()}
                 <span className="text-muted-foreground">
                   &nbsp;/&nbsp;{TEXT_MAX_LENGTH.toLocaleString()} characters

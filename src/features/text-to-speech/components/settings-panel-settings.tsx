@@ -17,12 +17,12 @@ export function SettingsPanelSettings() {
   return (
     <>
       {/* Voice Style Dropdown Section */}
-      <div className="border-b border-dashed p-4">
+      <div className="border-b bg-card p-4">
         <VoiceSelector />
       </div>
 
       {/* Voice Adjustments Section */}
-      <div className="p-4 flex-1">
+      <div className="flex-1 bg-card p-4">
         <FieldGroup className="gap-8">
           {sliders.map((slider) => (
             <form.Field key={slider.id} name={slider.id}>

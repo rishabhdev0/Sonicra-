@@ -1,543 +1,520 @@
 "use client";
 
-import {
-  Play, TrendingUp, TrendingDown,
-  AudioLines, Mic2, Hash, Clock, ChevronRight, Menu, Bell, Zap, X,
-} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useClerk } from "@clerk/nextjs";
-import { VoiceCreateDialog } from "@/features/voices/components/voice-create-dialog";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid,
+  AudioLines,
+  Bell,
+  Check,
+  ChevronRight,
+  CircleDollarSign,
+  Clock3,
+  CreditCard,
+  Library,
+  Mic2,
+  Pause,
+  Play,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+  WandSparkles,
+  X,
+} from "lucide-react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from "recharts";
+import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
+import { VoiceCreateDialog } from "@/features/voices/components/voice-create-dialog";
+import { COST_PER_UNIT } from "@/features/text-to-speech/data/constants";
+import { useCheckout } from "@/features/billing/hooks/use-checkout";
 import { useTRPC } from "@/trpc/client";
 import { cn } from "@/lib/utils";
-import { COST_PER_UNIT } from "@/features/text-to-speech/data/constants";
-import { useSidebar } from "@/components/ui/sidebar";
 
-function timeAgo(date: Date) {
-  const s = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+type Period = "7d" | "14d" | "30d";
+
+const FREE_TIER_LIMIT = 10_000;
+const periodDays: Record<Period, number> = { "7d": 7, "14d": 14, "30d": 30 };
+
+function formatCompact(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    notation: value >= 1000 ? "compact" : "standard",
+    maximumFractionDigits: 1,
+  }).format(value);
 }
 
-function fmt(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return n.toLocaleString();
+function timeAgo(date: Date) {
+  const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  if (seconds < 60) return "Just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function getDelta(current: number, previous: number) {
+  if (previous === 0) return current > 0 ? 100 : 0;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
+function MetricDelta({ value, label }: { value?: number; label: string }) {
+  if (value === undefined) {
+    return <p className="mt-2 text-[11px] text-muted-foreground">{label}</p>;
+  }
+
+  const positive = value > 0;
+  const negative = value < 0;
+
+  return (
+    <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+      {positive && <TrendingUp className="size-3 text-emerald-600" />}
+      {negative && <TrendingDown className="size-3 text-rose-600" />}
+      <span className={cn("font-semibold", positive && "text-emerald-700", negative && "text-rose-700", !positive && !negative && "text-muted-foreground")}>
+        {positive ? "+" : ""}{value}%
+      </span>
+      <span className="text-muted-foreground">{label}</span>
+    </div>
+  );
 }
 
 const tooltipStyle = {
-  fontSize: 12,
   borderRadius: 8,
-  border: "1px solid #e5e7eb",
-  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-  backgroundColor: "#fff",
-  color: "#111827",
+  border: "1px solid #dfe3dc",
+  background: "#ffffff",
+  boxShadow: "0 12px 28px rgba(22, 31, 29, 0.12)",
+  color: "#1d2926",
+  fontSize: 12,
 };
 
 export function DashboardView() {
-  const { toggleSidebar, isMobile } = useSidebar();
-  const clerk = useClerk();
-  const [activeTab, setActiveTab] = useState("Overview");
-  const [chartPeriod, setChartPeriod] = useState("Daily");
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
-  const [lastReadCount, setLastReadCount] = useState<number>(() => {
-    if (typeof window === "undefined") return 0;
-    return parseInt(localStorage.getItem("sonicra_notif_read") ?? "0", 10);
-  });
   const trpc = useTRPC();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { user } = useUser();
+  const { checkout, isPending: checkoutPending } = useCheckout();
+  const [period, setPeriod] = useState<Period>("7d");
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
+  const [lastReadCount, setLastReadCount] = useState(0);
 
-  const { data: generations } = useQuery(trpc.generations.getAll.queryOptions());
+  const { data: generations = [] } = useQuery(trpc.generations.getAll.queryOptions());
   const { data: voices } = useQuery(trpc.voices.getAll.queryOptions());
   const { data: billing } = useQuery(trpc.billing.getStatus.queryOptions());
+  const portalMutation = useMutation(trpc.billing.createPortalSession.mutationOptions({}));
 
-  const totalChars = useMemo(() => generations?.reduce((s, g) => s + (g.text?.length ?? 0), 0) ?? 0, [generations]);
-  const genCount = generations?.length ?? 0;
-  const customVoices = voices?.custom?.length ?? 0;
-  const systemVoices = voices?.system?.length ?? 0;
-  const avgChars = genCount > 0 ? Math.round(totalChars / genCount) : 0;
+  const billingView = searchParams.get("view") === "billing";
+  const totalCharacters = useMemo(
+    () => generations.reduce((total, generation) => total + generation.text.length, 0),
+    [generations],
+  );
+  const customVoiceCount = voices?.custom.length ?? 0;
+  const systemVoiceCount = voices?.system.length ?? 0;
+  const totalVoiceCount = customVoiceCount + systemVoiceCount;
+  const averageLength = generations.length ? Math.round(totalCharacters / generations.length) : 0;
 
-  const days = chartPeriod === "Monthly" ? 30 : chartPeriod === "Weekly" ? 14 : 7;
+  useEffect(() => {
+    setLastReadCount(Number(localStorage.getItem("sonicra_notif_read") ?? 0));
+  }, []);
 
-  const chartData = useMemo(() => Array.from({ length: days }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (days - 1 - i));
-    const prev = new Date(d);
-    prev.setDate(prev.getDate() - days);
-    const label = chartPeriod === "Monthly"
-      ? d.toLocaleDateString("en", { month: "short", day: "numeric" })
-      : chartPeriod === "Weekly"
-      ? d.toLocaleDateString("en", { weekday: "short", day: "numeric" })
-      : d.toLocaleDateString("en", { weekday: "short" });
-    const current = generations?.filter(g => new Date(g.createdAt).toDateString() === d.toDateString()) ?? [];
-    const previous = generations?.filter(g => new Date(g.createdAt).toDateString() === prev.toDateString()) ?? [];
+  const comparison = useMemo(() => {
+    const now = new Date();
+    const currentStart = new Date(now);
+    currentStart.setHours(0, 0, 0, 0);
+    currentStart.setDate(currentStart.getDate() - 6);
+    const previousStart = new Date(currentStart);
+    previousStart.setDate(previousStart.getDate() - 7);
+
+    const current = generations.filter((generation) => new Date(generation.createdAt) >= currentStart);
+    const previous = generations.filter((generation) => {
+      const date = new Date(generation.createdAt);
+      return date >= previousStart && date < currentStart;
+    });
+
+    const currentCharacters = current.reduce((total, generation) => total + generation.text.length, 0);
+    const previousCharacters = previous.reduce((total, generation) => total + generation.text.length, 0);
+
     return {
-      label,
-      thisWeek: current.length,
-      lastWeek: previous.length,
-      chars: current.reduce((s, g) => s + (g.text?.length ?? 0), 0),
+      generationDelta: getDelta(current.length, previous.length),
+      characterDelta: getDelta(currentCharacters, previousCharacters),
     };
-  }), [generations, days, chartPeriod]);
+  }, [generations]);
 
-  const voiceBarData = useMemo(() => {
-    const m: Record<string, number> = {};
-    generations?.forEach(g => { const n = g.voiceName ?? "Unknown"; m[n] = (m[n] ?? 0) + 1; });
-    const entries = Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const total = entries.reduce((s, [, v]) => s + v, 0);
-    return entries.map(([name, value]) => ({
-      name, value,
-      pct: total > 0 ? Math.round((value / total) * 100) : 0,
-      chars: value * avgChars,
-    }));
-  }, [generations, avgChars]);
+  const chartData = useMemo(() => {
+    const days = periodDays[period];
+    return Array.from({ length: days }, (_, index) => {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() - (days - 1 - index));
+      const dailyGenerations = generations.filter(
+        (generation) => new Date(generation.createdAt).toDateString() === date.toDateString(),
+      );
 
-  const recentNotifications = generations?.slice(0, 5) ?? [];
+      return {
+        label: date.toLocaleDateString("en-US", days > 14 ? { month: "short", day: "numeric" } : { weekday: "short" }),
+        generations: dailyGenerations.length,
+        characters: dailyGenerations.reduce((total, generation) => total + generation.text.length, 0),
+      };
+    });
+  }, [generations, period]);
+
+  const voiceUsage = useMemo(() => {
+    const counts = new Map<string, number>();
+    generations.forEach((generation) => {
+      counts.set(generation.voiceName, (counts.get(generation.voiceName) ?? 0) + 1);
+    });
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const maximum = ranked[0]?.[1] ?? 1;
+    return ranked.map(([name, count]) => ({ name, count, width: Math.round((count / maximum) * 100) }));
+  }, [generations]);
+
+  const recentNotifications = generations.slice(0, 5);
   const unreadCount = Math.max(0, recentNotifications.length - lastReadCount);
+  const chartHasData = chartData.some((item) => item.generations > 0);
+  const usagePercent = Math.min(100, Math.round((totalCharacters / FREE_TIER_LIMIT) * 100));
+  const estimatedUsageCost = billing?.hasActiveSubscription
+    ? (billing.estimatedCostCents ?? 0) / 100
+    : totalCharacters * COST_PER_UNIT;
 
-  function handleBell() {
-    setShowNotifications(v => !v);
-    if (!showNotifications) {
-      const count = recentNotifications.length;
-      setLastReadCount(count);
-      localStorage.setItem("sonicra_notif_read", String(count));
+  function toggleNotifications() {
+    setNotificationsOpen((open) => !open);
+    if (!notificationsOpen) {
+      setLastReadCount(recentNotifications.length);
+      localStorage.setItem("sonicra_notif_read", String(recentNotifications.length));
     }
   }
 
-  const weekCount = chartData.reduce((s, d) => s + d.thisWeek, 0);
-  const previousCount = chartData.reduce((s, d) => s + d.lastWeek, 0);
-  const periodDelta = previousCount > 0
-    ? Math.round(((weekCount - previousCount) / previousCount) * 100)
-    : weekCount > 0 ? 100 : 0;
-  const chartHasActivity = chartData.some(d => d.thisWeek > 0);
+  function openPortal() {
+    portalMutation.mutate(undefined, {
+      onSuccess: ({ portalUrl }) => window.open(portalUrl, "_blank", "noopener,noreferrer"),
+    });
+  }
 
-  // ── BILLING ──────────────────────────────────────────────────
-  const BillingView = () => {
-    const estimatedCost = (billing?.estimatedCostCents ?? 0) / 100;
-    const isActive = billing?.hasActiveSubscription;
-
-    const freeTier = [
-      { feature: "10,000 characters per month", included: true },
-      { feature: "5 system voices", included: true },
-      { feature: "Standard generation speed", included: true },
-      { feature: "Custom voice cloning", included: false },
-      { feature: "Generation history", included: false },
-      { feature: "Usage analytics", included: false },
-    ];
-
-    const proTier = [
-      { feature: "Unlimited characters", included: true },
-      { feature: "20+ premium system voices", included: true },
-      { feature: "Priority processing", included: true },
-      { feature: "Custom voice cloning", included: true },
-      { feature: "Full generation history", included: true },
-      { feature: "Advanced analytics", included: true },
-      { feature: "$0.30 per 1,000 characters", included: true },
-    ];
-
-    return (
-      <div className="space-y-5 max-w-2xl">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">Billing</h2>
-          <p className="text-sm text-gray-400 mt-0.5">Manage your plan and usage.</p>
-        </div>
-        {isActive && (
-          <div className="rounded-xl border border-gray-200 bg-white px-6 py-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
-              <div>
-                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest">Active Plan</p>
-                <p className="text-2xl font-semibold text-gray-900 mt-1.5">Sonicra Pro</p>
-                <p className="text-sm text-gray-400 mt-0.5">$0.60 / month · $0.30 per 1k characters</p>
-              </div>
-              <div className="flex gap-8 sm:text-right">
-                <div>
-                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest">This Period</p>
-                  <p className="text-2xl font-semibold text-gray-900 mt-1.5 tabular-nums">${estimatedCost.toFixed(2)}</p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest">Characters</p>
-                  <p className="text-2xl font-semibold text-gray-900 mt-1.5 tabular-nums">{fmt(totalChars)}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
-            <div className="px-6 py-5">
-              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest">Free</p>
-              <div className="flex items-baseline gap-1.5 mt-3">
-                <span className="text-4xl font-semibold text-gray-900">$0</span>
-                <span className="text-sm text-gray-400">/ month</span>
-              </div>
-            </div>
-            <div className="h-px bg-gray-100 mx-6" />
-            <div className="px-6 py-5 space-y-3 flex-1">
-              {freeTier.map(({ feature, included }) => (
-                <div key={feature} className="flex items-center gap-3">
-                  {included ? (
-                    <div className="size-[18px] rounded-full bg-gray-900 flex items-center justify-center shrink-0">
-                      <svg className="size-2.5 text-white" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </div>
-                  ) : (
-                    <div className="size-[18px] rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                      <svg className="size-2.5 text-gray-300" viewBox="0 0 12 12" fill="none"><path d="M3 9l6-6M9 9L3 3" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"/></svg>
-                    </div>
-                  )}
-                  <span className={cn("text-sm", included ? "text-gray-700" : "text-gray-300")}>{feature}</span>
-                </div>
-              ))}
-            </div>
-            <div className="px-6 pb-6">
-              <button disabled className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2.5 text-sm text-gray-400 cursor-not-allowed">Free plan</button>
-            </div>
-          </div>
-          <div className="rounded-xl border border-gray-900 bg-[#3f423f] overflow-hidden flex flex-col">
-            <div className="px-6 py-5">
-              <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">Pro</p>
-              <div className="flex items-baseline gap-1.5 mt-3">
-                <span className="text-4xl font-semibold text-white">$0.60</span>
-                <span className="text-sm text-gray-500">/ month</span>
-              </div>
-              <p className="text-sm text-gray-500 mt-1">+ $0.30 per 1,000 characters</p>
-            </div>
-            <div className="h-px bg-white/10 mx-6" />
-            <div className="px-6 py-5 space-y-3 flex-1">
-              {proTier.map(({ feature }) => (
-                <div key={feature} className="flex items-center gap-3">
-                  <div className="size-[18px] rounded-full bg-white/10 flex items-center justify-center shrink-0">
-                    <svg className="size-2.5 text-white" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  </div>
-                  <span className="text-sm text-gray-400">{feature}</span>
-                </div>
-              ))}
-            </div>
-            <div className="px-6 pb-6">
-              {isActive ? (
-                <button disabled className="w-full rounded-lg border border-white/10 bg-white/5 py-2.5 text-sm font-medium text-white cursor-default">✓ Current plan</button>
-              ) : (
-                <button className="w-full rounded-lg bg-white py-2.5 text-sm font-medium text-gray-900 hover:bg-gray-100 transition-colors">Upgrade to Pro</button>
-              )}
-            </div>
-          </div>
-        </div>
-        {isActive && (
-          <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100">
-              <p className="text-sm font-semibold text-gray-900">Usage Breakdown</p>
-              <p className="text-xs text-gray-400 mt-0.5">Current billing period</p>
-            </div>
-            <div className="divide-y divide-gray-50">
-              {[
-                { label: "Base subscription", amount: "$0.60", note: "Monthly flat fee" },
-                { label: "Characters used", amount: fmt(totalChars), note: `$${(totalChars * COST_PER_UNIT).toFixed(4)} at $0.30/1k` },
-                { label: "Generations made", amount: fmt(genCount), note: "Total this period" },
-                { label: "Estimated total", amount: `$${estimatedCost.toFixed(2)}`, note: "Sandbox · not charged", bold: true },
-              ].map(({ label, amount, note, bold }) => (
-                <div key={label} className="flex items-center justify-between px-6 py-4">
-                  <div>
-                    <p className={cn("text-sm", bold ? "font-semibold text-gray-900" : "text-gray-600")}>{label}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{note}</p>
-                  </div>
-                  <p className={cn("text-sm font-semibold tabular-nums", bold ? "text-gray-900" : "text-gray-600")}>{amount}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ── MAIN ─────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-gray-50/50">
+    <div className="min-h-full">
       <VoiceCreateDialog open={voiceDialogOpen} onOpenChange={setVoiceDialogOpen} />
+      <PageHeader
+        title={billingView ? "Billing & usage" : "Studio overview"}
+        description={billingView ? "Plan controls and metered character usage" : "Performance, activity, and voice operations"}
+      />
 
-      {/* ── Mobile top bar ── */}
-      {isMobile && (
-        <div className="bg-white border-b border-slate-100 px-4 h-14 flex items-center justify-between gap-3">
-          {/* Hamburger — left, opens sidebar Sheet */}
-          <button
-            onClick={toggleSidebar}
-            className="size-9 flex items-center justify-center rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors shrink-0"
-          >
-            <Menu className="size-4 text-gray-500" />
-          </button>
-
-          {/* Logo — center */}
-          <div className="flex items-center gap-2">
-            <div className="size-7 rounded-lg bg-gradient-to-br from-indigo-600 to-indigo-400 flex items-center justify-center shadow-md shadow-indigo-200 shrink-0">
-              <Zap className="size-4 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-extrabold text-[15px] tracking-[0.05em] text-slate-800">
-              SONIC<span className="text-indigo-600">RA</span>
-            </span>
+      <div className="mx-auto w-full max-w-[1480px] px-4 py-5 lg:px-7 lg:py-7">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="inline-flex h-8 items-center rounded-md border bg-card p-0.5 shadow-sm">
+            <button
+              type="button"
+              onClick={() => router.replace("/")}
+              className={cn("h-7 rounded px-3 text-xs font-semibold transition-colors", !billingView ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              onClick={() => router.replace("/?view=billing")}
+              className={cn("h-7 rounded px-3 text-xs font-semibold transition-colors", billingView ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}
+            >
+              Billing
+            </button>
           </div>
 
-          {/* Bell — right, with dropdown */}
           <div className="relative">
-            <button
-              onClick={handleBell}
-              className="relative size-9 flex items-center justify-center rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors shrink-0"
-            >
-              <Bell className="size-4 text-gray-500" strokeWidth={1.75} />
-              {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 size-4 rounded-full bg-indigo-600 text-white text-[9px] font-bold flex items-center justify-center">
-                  {Math.min(unreadCount, 9)}
-                </span>
-              )}
-            </button>
-
-            {showNotifications && (
-              <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-gray-900">Recent Activity</p>
-                  <button onClick={() => setShowNotifications(false)}>
-                    <X className="size-4 text-gray-400 hover:text-gray-600" />
+            <Button variant="outline" size="icon-sm" onClick={toggleNotifications} className="relative bg-card" aria-label="Open notifications">
+              <Bell className="size-4" />
+              {unreadCount > 0 && <span className="absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-background bg-[#ef765f]" />}
+            </Button>
+            {notificationsOpen && (
+              <div className="absolute right-0 top-10 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-lg border bg-popover shadow-xl">
+                <div className="flex items-center justify-between border-b px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold">Recent activity</p>
+                    <p className="text-[11px] text-muted-foreground">Latest audio generations</p>
+                  </div>
+                  <button type="button" onClick={() => setNotificationsOpen(false)} className="text-muted-foreground hover:text-foreground" aria-label="Close notifications">
+                    <X className="size-4" />
                   </button>
                 </div>
-                <div className="divide-y divide-gray-50 max-h-64 overflow-y-auto">
-                  {recentNotifications.length > 0 ? recentNotifications.map(g => (
-                    <Link
-                      key={g.id}
-                      href={`/text-to-speech/${g.id}`}
-                      onClick={() => setShowNotifications(false)}
-                      className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="size-6 rounded-full bg-indigo-50 flex items-center justify-center shrink-0 mt-0.5">
-                        <AudioLines className="size-3 text-indigo-500" strokeWidth={1.75} />
+                <div className="max-h-72 divide-y overflow-y-auto">
+                  {recentNotifications.length ? recentNotifications.map((generation) => (
+                    <Link key={generation.id} href={`/text-to-speech/${generation.id}`} onClick={() => setNotificationsOpen(false)} className="flex gap-3 px-4 py-3 transition-colors hover:bg-muted/60">
+                      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
+                        <AudioLines className="size-3.5" />
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-gray-800">{g.voiceName ?? "Unknown"} generated</p>
-                        <p className="text-[11px] text-gray-400 truncate mt-0.5">
-                          {g.text?.slice(0, 40)}{(g.text?.length ?? 0) > 40 ? "..." : ""}
-                        </p>
-                        <p className="text-[11px] text-gray-300 mt-1">{timeAgo(g.createdAt)}</p>
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-semibold">{generation.voiceName}</p>
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{generation.text}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">{timeAgo(generation.createdAt)}</p>
                       </div>
                     </Link>
-                  )) : (
-                    <div className="px-4 py-6 text-center">
-                      <p className="text-xs text-gray-400">No recent activity</p>
-                    </div>
-                  )}
-                </div>
-                <div className="px-4 py-2.5 border-t border-gray-100">
-                  <Link
-                    href="/text-to-speech"
-                    onClick={() => setShowNotifications(false)}
-                    className="text-[11px] font-medium text-gray-500 hover:text-gray-900 flex items-center gap-1"
-                  >
-                    View all <ChevronRight className="size-3" />
-                  </Link>
+                  )) : <p className="px-4 py-8 text-center text-xs text-muted-foreground">No activity yet</p>}
                 </div>
               </div>
             )}
           </div>
         </div>
-      )}
 
-      {/* ── Tabs bar ── */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="px-4 sm:px-8 flex items-center overflow-x-auto">
-          {(["Overview", "Billing"] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setActiveTab(t)}
-              className={cn(
-                "px-4 py-3.5 text-sm font-medium border-b-2 transition-all whitespace-nowrap shrink-0",
-                activeTab === t ? "text-gray-900 border-gray-900" : "text-gray-400 border-transparent hover:text-gray-600"
-              )}
-            >
-              {t}
-            </button>
-          ))}
-          <Link href="/voices" className="px-4 py-3.5 text-sm font-medium text-gray-400 border-b-2 border-transparent hover:text-gray-600 transition-all whitespace-nowrap shrink-0">
-            Voices
-          </Link>
-          <Link href="/text-to-speech" className="px-4 py-3.5 text-sm font-medium text-gray-400 border-b-2 border-transparent hover:text-gray-600 transition-all whitespace-nowrap shrink-0">
-            Generations
-          </Link>
-        </div>
-      </div>
-
-      {/* ── Page content ── */}
-      <div className="px-4 sm:px-8 py-6 max-w-7xl space-y-5">
-
-        {activeTab === "Billing" && <BillingView />}
-
-        {activeTab === "Overview" && (
-          <>
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900">Overview</h2>
-              <p className="text-sm text-gray-400 mt-0.5">Your voice generation metrics and recent activity.</p>
-            </div>
-
-            {/* 4 stat cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              {[
-                { label: "Total Generations", value: fmt(genCount), delta: periodDelta, sub: "vs last month", icon: <Hash className="size-4 text-gray-300" strokeWidth={1.5} /> },
-                { label: "Characters Used", value: fmt(totalChars), delta: 8, sub: "vs last month", icon: <AudioLines className="size-4 text-gray-300" strokeWidth={1.5} /> },
-                { label: "Avg Length (chars)", value: fmt(avgChars), delta: 0, sub: "vs last week", icon: <Clock className="size-4 text-gray-300" strokeWidth={1.5} /> },
-                { label: "Voices Available", value: `${systemVoices + customVoices}`, delta: customVoices, sub: `+${customVoices} new added`, icon: <Mic2 className="size-4 text-gray-300" strokeWidth={1.5} /> },
-              ].map((s) => (
-                <div key={s.label} className="border border-gray-200 rounded-xl p-5 bg-white">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-xs text-gray-400 font-medium leading-tight">{s.label}</p>
-                    {s.icon}
-                  </div>
-                  <p className="text-[28px] font-semibold text-gray-900 tabular-nums tracking-tight leading-none">{s.value}</p>
-                  <div className="flex items-center gap-1 mt-2">
-                    {s.delta > 0 ? <TrendingUp className="size-3 text-emerald-500" /> : s.delta < 0 ? <TrendingDown className="size-3 text-red-400" /> : null}
-                    <p className={cn("text-xs font-medium", s.delta > 0 ? "text-emerald-500" : s.delta < 0 ? "text-red-400" : "text-gray-400")}>
-                      {s.delta > 0 ? `+${s.delta}%` : s.delta < 0 ? `${s.delta}%` : "—"} {s.sub}
+        {billingView ? (
+          <div className="space-y-5">
+            <section className="grid gap-4 lg:grid-cols-[1.35fr_0.65fr]">
+              <div className="overflow-hidden rounded-lg border bg-card">
+                <div className="flex flex-col justify-between gap-6 p-5 sm:flex-row sm:items-center lg:p-6">
+                  <div>
+                    <div className="mb-3 flex items-center gap-2">
+                      <span className="rounded bg-accent px-2 py-1 text-[10px] font-bold uppercase text-accent-foreground">
+                        {billing?.hasActiveSubscription ? "Active" : "Free tier"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">Workspace plan</span>
+                    </div>
+                    <h2 className="text-2xl font-semibold">{billing?.hasActiveSubscription ? "Sonicra Pro" : "Sonicra Free"}</h2>
+                    <p className="mt-1 max-w-lg text-sm text-muted-foreground">
+                      {billing?.hasActiveSubscription ? "Metered voice generation with premium voices and custom cloning." : "10,000 characters included before a subscription is required."}
                     </p>
                   </div>
+                  {billing?.hasActiveSubscription ? (
+                    <Button onClick={openPortal} disabled={portalMutation.isPending} className="shrink-0">
+                      <CreditCard className="size-4" />
+                      Manage plan
+                    </Button>
+                  ) : (
+                    <Button onClick={checkout} disabled={checkoutPending} className="shrink-0">
+                      <Sparkles className="size-4" />
+                      Upgrade to Pro
+                    </Button>
+                  )}
+                </div>
+                <div className="grid border-t sm:grid-cols-3 sm:divide-x">
+                  {[
+                    { label: "Characters generated", value: totalCharacters.toLocaleString() },
+                    { label: "Estimated usage", value: `$${estimatedUsageCost.toFixed(2)}` },
+                    { label: "Generation rate", value: "$0.30 / 1k" },
+                  ].map((item) => (
+                    <div key={item.label} className="px-5 py-4">
+                      <p className="text-[11px] text-muted-foreground">{item.label}</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border bg-foreground p-5 text-background lg:p-6">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-background/65">Current allowance</p>
+                  <CircleDollarSign className="size-4 text-primary" />
+                </div>
+                <p className="mt-5 text-3xl font-semibold tabular-nums">{formatCompact(totalCharacters)}</p>
+                <p className="mt-1 text-xs text-background/55">of {FREE_TIER_LIMIT.toLocaleString()} free characters</p>
+                <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-background/15">
+                  <div className="h-full rounded-full bg-primary" style={{ width: `${usagePercent}%` }} />
+                </div>
+                <p className="mt-2 text-[11px] text-background/55">{Math.max(0, FREE_TIER_LIMIT - totalCharacters).toLocaleString()} characters remaining</p>
+              </div>
+            </section>
+
+            <section className="rounded-lg border bg-card">
+              <div className="border-b px-5 py-4">
+                <h3 className="text-sm font-semibold">What your workspace includes</h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">Production capabilities already connected to this organization.</p>
+              </div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  "20 built-in voices",
+                  "Custom voice cloning",
+                  "5,000 characters per generation",
+                  "Full generation history",
+                ].map((feature) => (
+                  <div key={feature} className="flex items-center gap-2.5 border-b px-5 py-4 last:border-b-0 sm:border-r lg:border-b-0">
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground"><Check className="size-3" /></span>
+                    <span className="text-xs font-medium">{feature}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <section className="studio-grid relative overflow-hidden rounded-lg border bg-card p-5 lg:p-6">
+              <div className="absolute inset-y-0 right-0 hidden w-[38%] bg-[linear-gradient(90deg,transparent,var(--card))] lg:block" />
+              <div className="relative flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+                <div>
+                  <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-primary">
+                    <span className="size-1.5 rounded-full bg-primary" />
+                    Voice workspace ready
+                  </div>
+                  <h2 className="max-w-xl text-2xl font-semibold leading-tight lg:text-[28px]">
+                    {user?.firstName ? `Good to see you, ${user.firstName}.` : "Your audio studio is ready."}
+                  </h2>
+                  <p className="mt-2 max-w-xl text-sm text-muted-foreground">
+                    Turn a script into polished speech, reuse a proven voice, or clone a new one for this workspace.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button variant="outline" onClick={() => setVoiceDialogOpen(true)} className="bg-card">
+                    <Mic2 className="size-4" />
+                    Clone voice
+                  </Button>
+                  <Button asChild>
+                    <Link href="/text-to-speech">
+                      <AudioLines className="size-4" />
+                      Create audio
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            </section>
+
+            <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {[
+                { label: "Total generations", value: formatCompact(generations.length), icon: AudioLines, delta: comparison.generationDelta, note: "vs previous 7 days" },
+                { label: "Characters used", value: formatCompact(totalCharacters), icon: Clock3, delta: comparison.characterDelta, note: "vs previous 7 days" },
+                { label: "Average script", value: formatCompact(averageLength), icon: WandSparkles, note: "characters per generation" },
+                { label: "Voice library", value: formatCompact(totalVoiceCount), icon: Library, note: `${customVoiceCount} custom, ${systemVoiceCount} built-in` },
+              ].map((metric) => (
+                <div key={metric.label} className="rounded-lg border bg-card p-4 lg:p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] font-medium text-muted-foreground">{metric.label}</p>
+                    <metric.icon className="size-4 text-muted-foreground/70" strokeWidth={1.7} />
+                  </div>
+                  <p className="mt-3 text-2xl font-semibold tabular-nums lg:text-[28px]">{metric.value}</p>
+                  <MetricDelta value={metric.delta} label={metric.note} />
                 </div>
               ))}
-            </div>
+            </section>
 
-            {/* Chart + Top Voices */}
-            <div className="grid grid-cols-1 lg:grid-cols-[70%_30%] gap-5 items-start">
-              <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,0.65fr)]">
+              <div className="rounded-lg border bg-card">
+                <div className="flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between lg:px-5">
                   <div>
-                    <p className="text-sm font-semibold text-gray-900">Generation Performance</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {chartPeriod === "Daily" ? "Last 7 days" : chartPeriod === "Weekly" ? "Last 14 days" : "Last 30 days"}
-                    </p>
+                    <h3 className="text-sm font-semibold">Generation activity</h3>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Completed audio jobs over time</p>
                   </div>
-                  <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-                    {["Daily", "Weekly", "Monthly"].map(p => (
-                      <button key={p} onClick={() => setChartPeriod(p)}
-                        className={cn("px-3 py-1 rounded-md text-xs font-medium transition-all", chartPeriod === p ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700")}>
-                        {p}
+                  <div className="inline-flex w-fit rounded-md bg-muted p-0.5">
+                    {(["7d", "14d", "30d"] as Period[]).map((item) => (
+                      <button key={item} type="button" onClick={() => setPeriod(item)} className={cn("h-7 rounded px-2.5 text-[11px] font-semibold", period === item ? "bg-card text-foreground shadow-sm" : "text-muted-foreground")}>
+                        {item}
                       </button>
                     ))}
                   </div>
                 </div>
-                <div className="px-4 pt-4 pb-2" style={{ height: 260 }}>
-                  {chartHasActivity ? (
+                <div className="h-[280px] px-2 pb-3 pt-5 sm:px-4">
+                  {chartHasData ? (
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 6" stroke="#f3f4f6" vertical={false} />
-                        <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#9ca3af" }} tickLine={false} axisLine={{ stroke: "#f3f4f6" }} interval={Math.floor(days / 5)} padding={{ left: 10, right: 10 }} />
-                        <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} tickLine={false} axisLine={false} allowDecimals={false} width={32} tickFormatter={(v) => v === 0 ? "0" : fmt(v)} />
-                        <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "#e5e7eb", strokeWidth: 1 }} formatter={(v: any, name: string) => [v, name === "thisWeek" ? "This period" : "Previous"]} />
-                        <Line type="monotone" dataKey="lastWeek" stroke="#e5e7eb" strokeWidth={1.5} strokeDasharray="4 4" dot={false} />
-                        <Line type="monotone" dataKey="thisWeek" stroke="#111827" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "#111827", stroke: "#fff", strokeWidth: 2 }} />
+                      <LineChart data={chartData} margin={{ top: 8, right: 12, left: -18, bottom: 0 }}>
+                        <CartesianGrid vertical={false} stroke="#e7e9e4" strokeDasharray="3 5" />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#7a827e", fontSize: 11 }} interval={period === "30d" ? 5 : 0} />
+                        <YAxis axisLine={false} tickLine={false} allowDecimals={false} tick={{ fill: "#7a827e", fontSize: 11 }} />
+                        <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "#9aa29d", strokeDasharray: "3 4" }} />
+                        <Line type="monotone" dataKey="generations" name="Generations" stroke="#0f766e" strokeWidth={2.25} dot={false} activeDot={{ r: 4, fill: "#0f766e", stroke: "#ffffff", strokeWidth: 2 }} />
                       </LineChart>
                     </ResponsiveContainer>
                   ) : (
-                    <div className="h-full flex flex-col items-center justify-center gap-2 border border-dashed border-gray-200 rounded-xl">
-                      <p className="text-sm text-gray-400">No activity this period</p>
-                      <Link href="/text-to-speech" className="text-xs font-medium text-gray-900 underline underline-offset-2">Create your first generation</Link>
+                    <div className="flex h-full flex-col items-center justify-center">
+                      <div className="mb-3 flex size-10 items-center justify-center rounded-lg bg-muted"><AudioLines className="size-4 text-muted-foreground" /></div>
+                      <p className="text-sm font-semibold">No activity in this range</p>
+                      <Link href="/text-to-speech" className="mt-1 text-xs font-medium text-primary hover:underline">Create the first generation</Link>
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-                <div className="px-5 py-4 border-b border-gray-100">
-                  <p className="text-sm font-semibold text-gray-900">Top Voices Used</p>
+              <div className="rounded-lg border bg-card p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold">Character allowance</h3>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Free-tier usage</p>
+                  </div>
+                  <CircleDollarSign className="size-4 text-primary" />
                 </div>
-                <div className="px-5 py-4 space-y-5">
-                  {voiceBarData.length > 0 ? voiceBarData.map(({ name, pct, value, chars }) => (
-                    <div key={name}>
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2.5">
-                          <div className="size-7 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center shrink-0">
-                            <svg className="size-3.5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="9" y1="22" x2="15" y2="22"/>
-                            </svg>
-                          </div>
-                          <p className="text-sm font-medium text-gray-800">{name}</p>
-                        </div>
-                        <p className="text-sm font-semibold text-gray-500 tabular-nums">{pct}%</p>
-                      </div>
-                      <p className="text-xs text-gray-400 mb-2 ml-9">{value} uses · {fmt(chars)} chars</p>
-                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden ml-9">
-                        <div className="h-full rounded-full bg-gray-800 transition-all duration-500" style={{ width: `${pct}%` }} />
-                      </div>
-                    </div>
-                  )) : (
-                    <p className="text-sm text-gray-400 text-center py-6">Generate to see voice usage</p>
-                  )}
+                <div className="mt-8 flex items-end justify-between gap-3">
+                  <p className="text-3xl font-semibold tabular-nums">{formatCompact(totalCharacters)}</p>
+                  <p className="pb-1 text-xs text-muted-foreground">of {formatCompact(FREE_TIER_LIMIT)}</p>
                 </div>
-                <div className="px-5 pb-4">
-                  <Link href="/voices" className="text-xs text-gray-400 hover:text-gray-900 transition-colors flex items-center gap-1">
-                    View All Voices <ChevronRight className="size-3" />
-                  </Link>
+                <div className="mt-4 h-2 overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${usagePercent}%` }} />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+                  <span>{usagePercent}% used</span>
+                  <span>{Math.max(0, FREE_TIER_LIMIT - totalCharacters).toLocaleString()} left</span>
+                </div>
+                <div className="mt-7 border-t pt-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Estimated value</span>
+                    <span className="text-sm font-semibold tabular-nums">${estimatedUsageCost.toFixed(2)}</span>
+                  </div>
+                  <button type="button" onClick={() => router.replace("/?view=billing")} className="mt-4 flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
+                    Review billing <ChevronRight className="size-3" />
+                  </button>
                 </div>
               </div>
-            </div>
+            </section>
 
-            {/* Recent Generations + Quick Actions */}
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-5">
-              <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-gray-900">Recent Generations</p>
-                  <Link href="/text-to-speech" className="text-xs text-gray-400 hover:text-gray-900 transition-colors flex items-center gap-1">
-                    View All <ChevronRight className="size-3" />
-                  </Link>
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,0.8fr)]">
+              <div className="overflow-hidden rounded-lg border bg-card">
+                <div className="flex items-center justify-between border-b px-4 py-4 lg:px-5">
+                  <div>
+                    <h3 className="text-sm font-semibold">Recent generations</h3>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Latest audio created by this workspace</p>
+                  </div>
+                  <Link href="/text-to-speech" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">View all <ChevronRight className="size-3" /></Link>
                 </div>
-                <div className="grid grid-cols-[32px_1fr_90px_70px_80px] gap-3 px-6 py-2.5 border-b border-gray-50">
-                  <div />
-                  <p className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Text Preview</p>
-                  <p className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Voice</p>
-                  <p className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Chars</p>
-                  <p className="text-[11px] font-medium text-gray-400 uppercase tracking-wider text-right">Time</p>
-                </div>
-                {generations && generations.length > 0 ? (
-                  <div className="divide-y divide-gray-50">
-                    {generations.slice(0, 6).map(g => (
-                      <Link key={g.id} href={`/text-to-speech/${g.id}`}
-                        className="grid grid-cols-[32px_1fr_90px_70px_80px] gap-3 items-center px-6 py-3.5 hover:bg-gray-50 transition-colors group">
-                        <div className="size-7 rounded-full border border-gray-200 flex items-center justify-center group-hover:border-gray-400 transition-colors shrink-0">
-                          <Play className="size-2.5 text-gray-500 fill-gray-500 ml-0.5" />
+                {generations.length ? (
+                  <div className="divide-y">
+                    {generations.slice(0, 6).map((generation, index) => (
+                      <Link key={generation.id} href={`/text-to-speech/${generation.id}`} className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/45 lg:grid-cols-[36px_minmax(0,1fr)_130px_80px_90px] lg:px-5">
+                        <span className="flex size-8 items-center justify-center rounded-md border bg-background text-muted-foreground">
+                          {index === 0 ? <Pause className="size-3.5" /> : <Play className="ml-0.5 size-3.5" />}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold">{generation.text}</p>
+                          <p className="mt-1 text-[10px] text-muted-foreground lg:hidden">{generation.voiceName} · {generation.text.length} chars</p>
                         </div>
-                        <p className="text-sm text-gray-600 truncate">"{g.text?.slice(0, 38)}{(g.text?.length ?? 0) > 38 ? "..." : ""}"</p>
-                        <p className="text-sm text-gray-500 truncate">{g.voiceName ?? "—"}</p>
-                        <p className="text-sm text-gray-400 tabular-nums">{g.text?.length ?? 0}</p>
-                        <p className="text-sm text-gray-400 tabular-nums text-right">{timeAgo(g.createdAt)}</p>
+                        <span className="hidden truncate text-xs text-muted-foreground lg:block">{generation.voiceName}</span>
+                        <span className="hidden text-xs tabular-nums text-muted-foreground lg:block">{generation.text.length}</span>
+                        <span className="text-right text-[11px] text-muted-foreground">{timeAgo(generation.createdAt)}</span>
                       </Link>
                     ))}
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center justify-center py-14 gap-2">
-                    <p className="text-sm text-gray-400">No generations yet</p>
-                    <Link href="/text-to-speech" className="text-xs font-medium text-gray-900 underline underline-offset-2">Start generating</Link>
+                  <div className="px-5 py-12 text-center">
+                    <p className="text-sm font-semibold">Nothing generated yet</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Your completed audio will appear here.</p>
                   </div>
                 )}
               </div>
 
-              {/* Quick Actions */}
-              <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-                <div className="px-5 py-4 border-b border-gray-100">
-                  <p className="text-sm font-semibold text-gray-900">Quick Actions</p>
+              <div className="rounded-lg border bg-card">
+                <div className="flex items-center justify-between border-b px-5 py-4">
+                  <div>
+                    <h3 className="text-sm font-semibold">Most-used voices</h3>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Ranked by generation count</p>
+                  </div>
+                  <Mic2 className="size-4 text-muted-foreground" />
                 </div>
-                <div className="grid grid-cols-2 gap-px bg-gray-100">
-                  {[
-                    { title: "Text to Speech", href: "/text-to-speech", icon: <svg className="size-5 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> },
-                    { title: "Clone Voice", href: "#", icon: <svg className="size-5 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="9" y1="22" x2="15" y2="22"/></svg> },
-                    { title: "Voice Library", href: "/voices", icon: <svg className="size-5 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg> },
-                    { title: "Settings", href: "#", icon: <svg className="size-5 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> },
-                  ].map(a => (
-                    <Link key={a.title} href={a.href} className="flex flex-col items-center justify-center gap-2.5 py-6 bg-white hover:bg-gray-50 transition-colors">
-                      {a.icon}
-                      <span className="text-xs font-medium text-gray-600 text-center leading-tight px-2">{a.title}</span>
-                    </Link>
-                  ))}
+                <div className="space-y-4 p-5">
+                  {voiceUsage.length ? voiceUsage.map((voice, index) => (
+                    <div key={voice.name}>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="text-[10px] font-semibold text-muted-foreground">0{index + 1}</span>
+                          <span className="truncate text-xs font-semibold">{voice.name}</span>
+                        </div>
+                        <span className="text-[11px] tabular-nums text-muted-foreground">{voice.count} jobs</span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-[#ef765f]" style={{ width: `${voice.width}%` }} /></div>
+                    </div>
+                  )) : <p className="py-8 text-center text-xs text-muted-foreground">Voice rankings appear after generation.</p>}
+                </div>
+                <div className="border-t px-5 py-3">
+                  <Link href="/voices" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">Open voice library <ChevronRight className="size-3" /></Link>
                 </div>
               </div>
-            </div>
-          </>
+            </section>
+          </div>
         )}
       </div>
     </div>

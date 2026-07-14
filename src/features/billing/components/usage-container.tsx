@@ -20,29 +20,29 @@ function PlanPreviewCard() {
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-3">
-        <div className="size-8 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0">
-          <Sparkles className="size-4 text-slate-700" strokeWidth={1.8} />
+        <div className="size-8 rounded-md bg-sidebar-primary/14 flex items-center justify-center shrink-0">
+          <Sparkles className="size-4 text-sidebar-primary" strokeWidth={1.8} />
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <p className="text-[12.5px] font-bold text-slate-900">Workspace Plan</p>
-            <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700">
-              Active
+            <p className="text-[11.5px] font-semibold text-sidebar-foreground">Free workspace</p>
+            <span className="rounded bg-white/7 px-1.5 py-0.5 text-[8px] font-bold uppercase text-sidebar-foreground/55">
+              10k
             </span>
           </div>
-          <p className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
-            Sandbox access with usage billing preview.
+          <p className="mt-0.5 text-[10px] leading-snug text-sidebar-foreground/45">
+            Upgrade for continued usage.
           </p>
         </div>
       </div>
-      <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="rounded-md border border-white/7 bg-black/8 px-3 py-2">
         <div className="flex items-center justify-between">
-          <span className="text-[10.5px] font-medium text-slate-500">Live rate</span>
-          <span className="text-[11px] font-bold text-slate-900">$0.30 / 1k chars</span>
+          <span className="text-[10px] font-medium text-sidebar-foreground/45">Pro rate</span>
+          <span className="text-[10.5px] font-semibold text-sidebar-foreground">$0.30 / 1k</span>
         </div>
       </div>
       <Button
-        className="h-8 w-full rounded-lg bg-slate-900 text-[11.5px] font-bold text-white hover:bg-slate-800"
+        className="h-8 w-full rounded-md bg-sidebar-primary text-[11px] font-bold text-sidebar-primary-foreground hover:bg-sidebar-primary/90"
         size="sm"
         disabled={isPending}
         onClick={checkout}
@@ -84,22 +84,22 @@ function ActiveSubscriptionCard({
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-3">
-        <div className="size-8 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0">
-          <CreditCard className="size-4 text-slate-700" strokeWidth={1.8} />
+        <div className="size-8 rounded-md bg-sidebar-primary/14 flex items-center justify-center shrink-0">
+          <CreditCard className="size-4 text-sidebar-primary" strokeWidth={1.8} />
         </div>
         <div className="min-w-0">
-          <p className="text-[12.5px] font-bold text-slate-900">Current Usage</p>
-          <p className="mt-0.5 text-[20px] font-extrabold leading-none text-slate-950">
+          <p className="text-[11px] font-semibold text-sidebar-foreground/55">Estimated usage</p>
+          <p className="mt-1 text-[18px] font-bold leading-none text-sidebar-foreground">
             {formatCurrency(estimatedCostCents)}
           </p>
-          <p className="mt-1 text-[10.5px] text-slate-500">
+          <p className="mt-1 text-[10px] text-sidebar-foreground/45">
             Estimated this billing period
           </p>
         </div>
       </div>
       <Button
         variant="outline"
-        className="h-8 w-full rounded-lg text-[11.5px] font-bold"
+        className="h-8 w-full rounded-md border-white/10 bg-white/5 text-[11px] font-bold text-sidebar-foreground hover:bg-white/10 hover:text-white"
         size="sm"
         disabled={portalMutation.isPending}
         onClick={openPortal}
@@ -144,7 +144,7 @@ export function UsageContainer() {
   });
 
   return (
-    <div className="group-data-[collapsible=icon]:hidden mx-1 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+    <div className="group-data-[collapsible=icon]:hidden rounded-md border border-white/8 bg-white/4 p-3">
       {isLoading ? (
         <UsageSkeleton />
       ) : data?.hasActiveSubscription ? (

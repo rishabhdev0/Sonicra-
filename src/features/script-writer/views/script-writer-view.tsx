@@ -1,57 +1,63 @@
 "use client";
 
 import { useState } from "react";
-import { 
-  Mic, FileText, Megaphone, Youtube, Lightbulb, 
-  BookOpen, Newspaper, Copy, Check, AudioLines, 
-  Loader2, Sparkles, Clock
+import { useRouter } from "next/navigation";
+import {
+  AudioLines,
+  BookOpen,
+  Check,
+  Clock3,
+  Copy,
+  FileText,
+  Lightbulb,
+  Loader2,
+  Megaphone,
+  Mic,
+  Newspaper,
+  Sparkles,
+  Youtube,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
-import { SCRIPT_FORMATS } from "../data/formats";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { SCRIPT_FORMATS } from "../data/formats";
 
-// Map format IDs to proper Lucide icons
 const FORMAT_ICONS: Record<string, React.ReactNode> = {
-  "podcast-intro": <Mic className="size-5 text-indigo-600" strokeWidth={1.75} />,
-  "ad-15": <Megaphone className="size-5 text-rose-600" strokeWidth={1.75} />,
-  "ad-30": <Megaphone className="size-5 text-orange-600" strokeWidth={1.75} />,
-  "ad-60": <Megaphone className="size-5 text-amber-600" strokeWidth={1.75} />,
-  "youtube-intro": <Youtube className="size-5 text-red-600" strokeWidth={1.75} />,
-  "explainer": <Lightbulb className="size-5 text-yellow-600" strokeWidth={1.75} />,
-  "audiobook-chapter": <BookOpen className="size-5 text-emerald-600" strokeWidth={1.75} />,
-  "news-report": <Newspaper className="size-5 text-slate-600" strokeWidth={1.75} />,
+  "podcast-intro": <Mic className="size-4 text-primary" />,
+  "ad-15": <Megaphone className="size-4 text-rose-600" />,
+  "ad-30": <Megaphone className="size-4 text-orange-600" />,
+  "ad-60": <Megaphone className="size-4 text-amber-600" />,
+  "youtube-intro": <Youtube className="size-4 text-red-600" />,
+  explainer: <Lightbulb className="size-4 text-amber-600" />,
+  "audiobook-chapter": <BookOpen className="size-4 text-emerald-700" />,
+  "news-report": <Newspaper className="size-4 text-sky-700" />,
 };
 
 export function ScriptWriterView() {
   const router = useRouter();
- const [selectedFormat, setSelectedFormat] = useState<string>(
-  SCRIPT_FORMATS[0].id
-);
+  const [selectedFormat, setSelectedFormat] = useState(SCRIPT_FORMATS[0].id);
   const [details, setDetails] = useState("");
   const [script, setScript] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const format = SCRIPT_FORMATS.find((f) => f.id === selectedFormat)!;
+  const format = SCRIPT_FORMATS.find((item) => item.id === selectedFormat)!;
 
-  const generateScript = async () => {
+  async function generateScript() {
     if (!details.trim()) {
       toast.error("Please describe what you want to create");
       return;
     }
+
     setIsGenerating(true);
     setScript("");
     try {
       const response = await fetch("/api/script-writer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          format: selectedFormat,
-          details: details.trim(),
-        }),
+        body: JSON.stringify({ format: selectedFormat, details: details.trim() }),
       });
       if (!response.ok) throw new Error("Failed to generate script");
       const data = await response.json();
@@ -61,165 +67,128 @@ export function ScriptWriterView() {
     } finally {
       setIsGenerating(false);
     }
-  };
+  }
 
-  const copyScript = () => {
+  function copyScript() {
     navigator.clipboard.writeText(script);
     setCopied(true);
-    toast.success("Script copied!");
+    toast.success("Script copied");
     setTimeout(() => setCopied(false), 2000);
-  };
+  }
 
-  // ✅ Fixed: use sessionStorage instead of URL params
-  const useInTTS = () => {
+  function useInTTS() {
     sessionStorage.setItem("tts-prefill", script);
     router.push("/text-to-speech");
-  };
+  }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-auto bg-slate-50/50">
-      <div className="px-6 py-8 max-w-4xl mx-auto w-full space-y-8">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <PageHeader title="AI script writer" description="Build a production-ready script, then send it to speech" />
 
-        {/* Header */}
-        <div className="flex items-start gap-4">
-          <div className="size-11 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0">
-            <Sparkles className="size-5 text-indigo-600" strokeWidth={1.75} />
-          </div>
-          <div>
-            <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">
-              AI Script Writer
-            </h1>
-            <p className="text-[13px] text-slate-500 mt-0.5">
-              Generate professional scripts instantly, then convert to speech in one click.
-            </p>
-          </div>
-        </div>
-
-        {/* Format Selector */}
-        <div className="space-y-3">
-          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em]">
-            Choose a format
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {SCRIPT_FORMATS.map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setSelectedFormat(f.id)}
-                className={cn(
-                  "rounded-xl border p-3.5 text-left transition-all group",
-                  selectedFormat === f.id
-                    ? "border-indigo-200 bg-indigo-50/80 shadow-sm"
-                    : "border-slate-200 bg-white hover:border-indigo-100 hover:bg-slate-50/80"
-                )}
-              >
-                <div className={cn(
-                  "size-8 rounded-lg flex items-center justify-center mb-2.5",
-                  selectedFormat === f.id ? "bg-white shadow-sm" : "bg-slate-50"
-                )}>
-                  {FORMAT_ICONS[f.id]}
-                </div>
-                <p className={cn(
-                  "text-[12.5px] font-semibold leading-tight",
-                  selectedFormat === f.id ? "text-indigo-700" : "text-slate-700"
-                )}>
-                  {f.label}
-                </p>
-                <p className="text-[10.5px] text-slate-400 mt-0.5 leading-snug">
-                  {f.description}
-                </p>
-                <div className="flex items-center gap-1 mt-2">
-                  <Clock className="size-3 text-slate-300" />
-                  <span className="text-[10px] text-slate-400">{f.duration}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Input */}
-        <div className="space-y-2">
-          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em]">
-            Describe your {format.label.toLowerCase()}
-          </p>
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <Textarea
-              value={details}
-              onChange={(e) => setDetails(e.target.value)}
-              placeholder={`Describe what you want to create. For example: A tech podcast called "Future Forward" hosted by two friends who discuss AI, startups and the future of work...`}
-              className="border-0 shadow-none resize-none focus-visible:ring-0 text-[14px] leading-relaxed min-h-[120px] p-4 placeholder:text-slate-300"
-            />
-            <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <p className="text-[11px] text-slate-400">
-                {details.length} characters
-              </p>
-              <Button
-                onClick={generateScript}
-                disabled={isGenerating || !details.trim()}
-                size="sm"
-                className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white"
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Writing...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="size-3.5" />
-                    Generate Script
-                  </>
-                )}
-              </Button>
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto grid w-full max-w-[1280px] gap-5 p-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:p-7">
+          <aside className="h-fit overflow-hidden rounded-lg border bg-card lg:sticky lg:top-0">
+            <div className="border-b px-4 py-4">
+              <p className="text-[11px] font-semibold uppercase text-primary">Output format</p>
+              <p className="mt-1 text-xs text-muted-foreground">Choose the structure and target length.</p>
             </div>
-          </div>
-        </div>
-
-        {/* Output */}
-        {script && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em]">
-                Generated script
-              </p>
-              <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                <FileText className="size-3.5" />
-                {script.length} chars
-                <span className="text-slate-200 mx-1">·</span>
-                ~${(script.length * 0.0003).toFixed(4)} to generate audio
-              </div>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-5">
-                <p className="text-[14.5px] text-slate-800 leading-[1.8] tracking-tight whitespace-pre-wrap font-[450]">
-                  {script}
-                </p>
-              </div>
-              <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-end gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={copyScript}
-                  className="gap-1.5 text-[12px]"
-                >
-                  {copied ? (
-                    <Check className="size-3.5 text-emerald-600" />
-                  ) : (
-                    <Copy className="size-3.5" />
+            <div className="divide-y p-1.5">
+              {SCRIPT_FORMATS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setSelectedFormat(item.id)}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors",
+                    selectedFormat === item.id ? "bg-accent text-accent-foreground" : "hover:bg-muted/65",
                   )}
-                  {copied ? "Copied!" : "Copy"}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={useInTTS}
-                  className="gap-1.5 text-[12px] bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
-                  <AudioLines className="size-3.5" />
-                  Use in TTS
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-card">
+                    {FORMAT_ICONS[item.id]}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-semibold">{item.label}</span>
+                    <span className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <Clock3 className="size-2.5" /> {item.duration}
+                    </span>
+                  </span>
+                  {selectedFormat === item.id && <Check className="size-3.5 text-primary" />}
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <main className="min-w-0 space-y-5">
+            <section className="overflow-hidden rounded-lg border bg-card">
+              <div className="flex items-start justify-between gap-4 border-b px-5 py-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="size-4 text-primary" />
+                    <h1 className="text-sm font-semibold">Create a {format.label.toLowerCase()}</h1>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{format.description}</p>
+                </div>
+                <span className="hidden rounded bg-muted px-2 py-1 text-[10px] font-semibold text-muted-foreground sm:block">{format.duration}</span>
+              </div>
+
+              <div className="p-4 lg:p-5">
+                <label htmlFor="script-details" className="mb-2 block text-[11px] font-semibold text-muted-foreground">
+                  Creative brief
+                </label>
+                <Textarea
+                  id="script-details"
+                  value={details}
+                  onChange={(event) => setDetails(event.target.value)}
+                  placeholder={`Describe the audience, message, tone, and important details for this ${format.label.toLowerCase()}...`}
+                  className="min-h-44 resize-none bg-background p-4 text-sm leading-6 shadow-none placeholder:text-muted-foreground/55"
+                />
+              </div>
+
+              <div className="flex flex-col gap-3 border-t bg-background/55 px-4 py-3 sm:flex-row sm:items-center sm:justify-between lg:px-5">
+                <p className="text-[11px] text-muted-foreground">{details.length.toLocaleString()} characters in brief</p>
+                <Button onClick={generateScript} disabled={isGenerating || !details.trim()} size="sm">
+                  {isGenerating ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  {isGenerating ? "Writing script..." : "Generate script"}
                 </Button>
               </div>
-            </div>
-          </div>
-        )}
+            </section>
+
+            {script ? (
+              <section className="overflow-hidden rounded-lg border bg-card">
+                <div className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="size-4 text-primary" />
+                    <div>
+                      <h2 className="text-sm font-semibold">Generated script</h2>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">{script.length.toLocaleString()} chars · ~${(script.length * 0.0003).toFixed(4)} audio usage</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={copyScript} className="bg-card">
+                      {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
+                      {copied ? "Copied" : "Copy"}
+                    </Button>
+                    <Button size="sm" onClick={useInTTS}>
+                      <AudioLines className="size-3.5" />
+                      Use in TTS
+                    </Button>
+                  </div>
+                </div>
+                <article className="whitespace-pre-wrap px-5 py-6 text-[14px] leading-7 text-foreground lg:px-7">
+                  {script}
+                </article>
+              </section>
+            ) : (
+              <section className="flex min-h-48 items-center justify-center rounded-lg border border-dashed bg-card/55 p-6 text-center">
+                <div>
+                  <FileText className="mx-auto size-5 text-muted-foreground" />
+                  <p className="mt-3 text-sm font-semibold">Your script will appear here</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Add a useful brief and generate when you are ready.</p>
+                </div>
+              </section>
+            )}
+          </main>
+        </div>
       </div>
     </div>
   );
