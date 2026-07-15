@@ -2,62 +2,86 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useUser } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
+import { UserButton, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import type { inferRouterOutputs } from "@trpc/server";
 import {
   AudioLines,
   Bell,
-  Check,
+  BookOpenText,
+  ChevronDown,
   ChevronRight,
   CircleDollarSign,
-  Clock3,
-  CreditCard,
+  Crown,
+  Globe2,
   Library,
   Mic2,
+  MoreVertical,
   Pause,
   Play,
   Sparkles,
+  Star,
   TrendingDown,
   TrendingUp,
+  Users,
   WandSparkles,
   X,
+  type LucideIcon,
 } from "lucide-react";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { PageHeader } from "@/components/page-header";
+import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Textarea } from "@/components/ui/textarea";
+import { VoiceAvatar } from "@/components/voice-avatar/voice-avatar";
 import { VoiceCreateDialog } from "@/features/voices/components/voice-create-dialog";
-import { COST_PER_UNIT } from "@/features/text-to-speech/data/constants";
 import { useCheckout } from "@/features/billing/hooks/use-checkout";
-import { useTRPC } from "@/trpc/client";
+import { TEXT_MAX_LENGTH } from "@/features/text-to-speech/data/constants";
+import { useAudioPlayback } from "@/hooks/use-audio-playback";
 import { cn } from "@/lib/utils";
+import type { AppRouter } from "@/trpc/routers/_app";
+import { useTRPC } from "@/trpc/client";
 
-type Period = "7d" | "14d" | "30d";
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type Generation = RouterOutputs["generations"]["getAll"][number];
+type Voice = RouterOutputs["voices"]["getAll"]["system"][number];
 
 const FREE_TIER_LIMIT = 10_000;
-const periodDays: Record<Period, number> = { "7d": 7, "14d": 14, "30d": 30 };
+const TONES = [
+  { label: "Natural", value: "0.8" },
+  { label: "Warm", value: "0.65" },
+  { label: "Expressive", value: "1.05" },
+];
+const USAGE_COLORS = ["#6d5dfc", "#3478f6", "#22a7f0", "#f59e0b"];
 
-function formatCompact(value: number) {
+function compactNumber(value: number) {
   return new Intl.NumberFormat("en-US", {
-    notation: value >= 1000 ? "compact" : "standard",
+    notation: value >= 1_000 ? "compact" : "standard",
     maximumFractionDigits: 1,
   }).format(value);
 }
 
-function timeAgo(date: Date) {
-  const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+function timeAgo(value: Date | string) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1_000));
   if (seconds < 60) return "Just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3_600)} hr ago`;
+  const days = Math.floor(seconds / 86_400);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function greetingForHour(hour: number) {
+  if (hour >= 5 && hour < 12) return "Good morning";
+  if (hour >= 12 && hour < 17) return "Good afternoon";
+  if (hour >= 17 && hour < 22) return "Good evening";
+  return "Good night";
 }
 
 function getDelta(current: number, previous: number) {
@@ -65,458 +89,448 @@ function getDelta(current: number, previous: number) {
   return Math.round(((current - previous) / previous) * 100);
 }
 
-function MetricDelta({ value, label }: { value?: number; label: string }) {
-  if (value === undefined) {
-    return <p className="mt-2 text-[11px] text-muted-foreground">{label}</p>;
-  }
-
-  const positive = value > 0;
-  const negative = value < 0;
-
+function MetricCard({
+  label,
+  value,
+  detail,
+  delta,
+  icon: Icon,
+  iconClassName,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  delta?: number;
+  icon: LucideIcon;
+  iconClassName: string;
+}) {
   return (
-    <div className="mt-2 flex items-center gap-1.5 text-[11px]">
-      {positive && <TrendingUp className="size-3 text-emerald-600" />}
-      {negative && <TrendingDown className="size-3 text-rose-600" />}
-      <span className={cn("font-semibold", positive && "text-emerald-700", negative && "text-rose-700", !positive && !negative && "text-muted-foreground")}>
-        {positive ? "+" : ""}{value}%
-      </span>
-      <span className="text-muted-foreground">{label}</span>
+    <div className="min-h-32 rounded-2xl border border-[#e4e7ef] bg-white p-5 shadow-[0_10px_32px_rgba(74,85,125,0.045)]">
+      <div className="flex items-start gap-4">
+        <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-full", iconClassName)}>
+          <Icon className="size-5" strokeWidth={1.9} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[12px] font-medium text-[#526079]">{label}</p>
+          <p className="mt-1 text-[24px] font-bold leading-none tabular-nums text-[#111323]">{value}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px]">
+            {delta !== undefined && (
+              <span className={cn("flex items-center gap-1 font-semibold", delta > 0 ? "text-[#2876f3]" : delta < 0 ? "text-rose-600" : "text-muted-foreground")}>
+                {delta > 0 ? <TrendingUp className="size-3" /> : delta < 0 ? <TrendingDown className="size-3" /> : null}
+                {delta > 0 ? "+" : ""}{delta}%
+              </span>
+            )}
+            <span className="text-muted-foreground">{detail}</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-const tooltipStyle = {
-  borderRadius: 8,
-  border: "1px solid #dfe3dc",
-  background: "#ffffff",
-  boxShadow: "0 12px 28px rgba(22, 31, 29, 0.12)",
-  color: "#1d2926",
-  fontSize: 12,
-};
+function QuickCreate({ voices }: { voices: Voice[] }) {
+  const router = useRouter();
+  const [text, setText] = useState("");
+  const [voiceId, setVoiceId] = useState("");
+  const [tone, setTone] = useState(TONES[0].value);
 
-export function DashboardView() {
+  const effectiveVoiceId = voiceId || voices[0]?.id || "";
+  const selectedVoice = voices.find((voice) => voice.id === effectiveVoiceId) ?? voices[0];
+
+  function continueToStudio() {
+    const trimmed = text.trim();
+    if (!trimmed || !selectedVoice) return;
+    sessionStorage.setItem("tts-prefill", trimmed);
+    router.push(`/text-to-speech?voiceId=${encodeURIComponent(selectedVoice.id)}&temperature=${tone}`);
+  }
+
+  return (
+    <section className="rounded-2xl border bg-card p-5 shadow-[0_8px_28px_rgba(15,23,42,0.035)] sm:p-6">
+      <div className="flex items-start gap-3">
+        <Sparkles className="mt-0.5 size-5 text-primary" />
+        <div>
+          <h2 className="text-[16px] font-bold">Quick Create</h2>
+          <p className="mt-1 text-[12px] text-muted-foreground">Turn your text into natural speech in the full generation studio.</p>
+        </div>
+      </div>
+
+      <div className="mt-5 overflow-hidden rounded-xl border border-input bg-white focus-within:border-primary/55 focus-within:ring-3 focus-within:ring-primary/10">
+        <Textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          maxLength={TEXT_MAX_LENGTH}
+          placeholder="Type or paste your text here..."
+          className="min-h-36 resize-none rounded-none border-0 bg-transparent px-4 py-4 text-[13px] shadow-none focus-visible:ring-0"
+        />
+        <p className="px-4 pb-3 text-[10px] text-muted-foreground">{text.length.toLocaleString()} / {TEXT_MAX_LENGTH.toLocaleString()} characters</p>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-[1.05fr_0.95fr_0.9fr_auto] xl:items-end">
+        <label className="block min-w-0">
+          <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground">Voice</span>
+          <Select value={effectiveVoiceId} onValueChange={setVoiceId} disabled={!voices.length}>
+            <SelectTrigger className="h-10 w-full rounded-lg bg-white text-[12px] shadow-none">
+              <SelectValue placeholder="No voices available" />
+            </SelectTrigger>
+            <SelectContent>
+              {voices.map((voice) => (
+                <SelectItem key={voice.id} value={voice.id}>
+                  <VoiceAvatar seed={voice.id} name={voice.name} className="size-5" />
+                  {voice.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+
+        <label className="block min-w-0">
+          <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground">Language</span>
+          <Select value={selectedVoice?.language ?? "unavailable"} disabled>
+            <SelectTrigger className="h-10 w-full rounded-lg bg-white text-[12px] shadow-none">
+              <Globe2 className="size-4 text-primary" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={selectedVoice?.language ?? "unavailable"}>{selectedVoice?.language ?? "Unavailable"}</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+
+        <label className="block min-w-0">
+          <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground">Tone</span>
+          <Select value={tone} onValueChange={setTone}>
+            <SelectTrigger className="h-10 w-full rounded-lg bg-white text-[12px] shadow-none">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TONES.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </label>
+
+        <Button className="h-10 rounded-lg px-5 text-[12px] font-semibold shadow-[0_8px_20px_rgba(109,93,252,0.24)] sm:col-span-3 xl:col-span-1" disabled={!text.trim() || !selectedVoice} onClick={continueToStudio}>
+          <AudioLines className="size-4" />
+          Continue to studio
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function RecentGenerationRow({ generation }: { generation: Generation }) {
+  const { isPlaying, isLoading, togglePlay } = useAudioPlayback(`/api/audio/${generation.id}`);
+
+  return (
+    <div className="grid grid-cols-[36px_minmax(0,1fr)_auto_28px] items-center gap-2 py-2.5">
+      <button
+        type="button"
+        onClick={togglePlay}
+        disabled={isLoading}
+        className="flex size-9 items-center justify-center rounded-full border bg-white text-primary transition-colors hover:border-primary/30 hover:bg-accent disabled:opacity-50"
+        aria-label={isPlaying ? "Pause generation" : "Play generation"}
+      >
+        {isPlaying ? <Pause className="size-3.5" /> : <Play className="ml-0.5 size-3.5" />}
+      </button>
+      <div className="min-w-0">
+        <p className="truncate text-[12px] font-semibold">{generation.text}</p>
+        <p className="mt-1 truncate text-[10px] text-muted-foreground">{generation.voiceName} · {timeAgo(generation.createdAt)}</p>
+      </div>
+      <span className="hidden text-[10px] tabular-nums text-muted-foreground sm:block">{generation.text.length} chars</span>
+      <Button asChild variant="ghost" size="icon-sm" className="size-7 text-muted-foreground">
+        <Link href={`/text-to-speech/${generation.id}`} aria-label="Open generation">
+          <MoreVertical className="size-4" />
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
+function RecentGenerations({ generations }: { generations: Generation[] }) {
+  return (
+    <section className="rounded-2xl border bg-card p-5 shadow-[0_8px_28px_rgba(15,23,42,0.035)]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[14px] font-bold">Recent voices</h2>
+        <Link href="/text-to-speech" className="text-[11px] font-semibold text-primary hover:underline">View all</Link>
+      </div>
+      {generations.length ? (
+        <div className="mt-3 divide-y">{generations.slice(0, 5).map((generation) => <RecentGenerationRow key={generation.id} generation={generation} />)}</div>
+      ) : (
+        <div className="py-10 text-center">
+          <AudioLines className="mx-auto size-5 text-muted-foreground" />
+          <p className="mt-3 text-[12px] font-semibold">No generations yet</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">Your latest audio will appear here.</p>
+        </div>
+      )}
+      <Button asChild variant="outline" className="mt-3 h-9 w-full rounded-lg text-[11px] font-semibold shadow-none">
+        <Link href="/text-to-speech">Go to generation history</Link>
+      </Button>
+    </section>
+  );
+}
+
+function UsageOverview({ generations, usagePercent }: { generations: Generation[]; usagePercent: number }) {
+  const data = useMemo(() => {
+    const totals = new Map<string, number>();
+    generations.forEach((generation) => totals.set(generation.voiceName, (totals.get(generation.voiceName) ?? 0) + generation.text.length));
+    const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    const visible = ranked.slice(0, 3).map(([name, value]) => ({ name, value }));
+    const other = ranked.slice(3).reduce((sum, [, value]) => sum + value, 0);
+    if (other) visible.push({ name: "Other voices", value: other });
+    return visible;
+  }, [generations]);
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+
+  return (
+    <section className="rounded-2xl border bg-card p-5 shadow-[0_8px_28px_rgba(15,23,42,0.035)]">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[14px] font-bold">Usage overview</h2>
+          <p className="mt-1 text-[10px] text-muted-foreground">Characters by voice</p>
+        </div>
+        <span className="rounded-lg border px-2.5 py-1.5 text-[10px] font-medium">All time</span>
+      </div>
+
+      {data.length ? (
+        <div className="mt-4 grid items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)] xl:grid-cols-1 2xl:grid-cols-[150px_minmax(0,1fr)]">
+          <div className="relative mx-auto h-[150px] w-[150px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={data} dataKey="value" nameKey="name" innerRadius={50} outerRadius={69} paddingAngle={2} stroke="none">
+                  {data.map((item, index) => <Cell key={item.name} fill={USAGE_COLORS[index]} />)}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-[20px] font-bold tabular-nums">{usagePercent}%</span>
+              <span className="text-[10px] text-muted-foreground">Used</span>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {data.map((item, index) => (
+              <div key={item.name} className="flex items-center gap-2 text-[10px]">
+                <span className="size-2.5 rounded-sm" style={{ backgroundColor: USAGE_COLORS[index] }} />
+                <span className="min-w-0 flex-1 truncate text-muted-foreground">{item.name}</span>
+                <span className="font-semibold tabular-nums">{Math.round((item.value / total) * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="py-10 text-center text-[11px] text-muted-foreground">Usage appears after your first generation.</div>
+      )}
+
+      <div className="mt-4 border-t pt-4">
+        <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+          <span>{usagePercent}% of the free allowance used</span>
+          <Link href="/?view=billing" className="font-semibold text-primary hover:underline">Review plan</Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function VoiceLibrary({ voices }: { voices: Voice[] }) {
+  return (
+    <section className="rounded-2xl border bg-card p-5 shadow-[0_8px_28px_rgba(15,23,42,0.035)]">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[14px] font-bold">Your voice library</h2>
+          <p className="mt-1 text-[10px] text-muted-foreground">Continue with a voice already in your workspace.</p>
+        </div>
+        <Link href="/voices" className="text-[11px] font-semibold text-primary hover:underline">View all</Link>
+      </div>
+
+      {voices.length ? (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+          {voices.slice(0, 4).map((voice) => (
+            <Link key={voice.id} href={`/text-to-speech?voiceId=${voice.id}`} className="group min-w-0 rounded-xl border bg-white p-4 transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-[0_10px_25px_rgba(109,93,252,0.08)]">
+              <div className="flex items-start justify-between gap-2">
+                <VoiceAvatar seed={voice.id} name={voice.name} className="size-11 border-2 border-white shadow-sm" />
+                <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+              </div>
+              <p className="mt-4 truncate text-[12px] font-bold">{voice.name}</p>
+              <p className="mt-1 truncate text-[10px] text-muted-foreground">{voice.language} · {voice.category.toLowerCase().replaceAll("_", " ")}</p>
+              <p className="mt-4 text-[9px] font-semibold uppercase text-primary">{voice.variant === "CUSTOM" ? "Custom voice" : "Built-in voice"}</p>
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <div className="py-10 text-center text-[11px] text-muted-foreground">No voices are available in this workspace.</div>
+      )}
+    </section>
+  );
+}
+
+export function DashboardView({ billingView }: { billingView: boolean }) {
   const trpc = useTRPC();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { user } = useUser();
   const { checkout, isPending: checkoutPending } = useCheckout();
-  const [period, setPeriod] = useState<Period>("7d");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
-  const [lastReadCount, setLastReadCount] = useState(0);
+  const [greeting, setGreeting] = useState("Welcome back");
+
+  useEffect(() => {
+    const updateGreeting = () => setGreeting(greetingForHour(new Date().getHours()));
+    updateGreeting();
+    const interval = window.setInterval(updateGreeting, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const { data: generations = [] } = useQuery(trpc.generations.getAll.queryOptions());
-  const { data: voices } = useQuery(trpc.voices.getAll.queryOptions());
+  const { data: voiceGroups } = useQuery(trpc.voices.getAll.queryOptions());
   const { data: billing } = useQuery(trpc.billing.getStatus.queryOptions());
   const portalMutation = useMutation(trpc.billing.createPortalSession.mutationOptions({}));
 
-  const billingView = searchParams.get("view") === "billing";
-  const totalCharacters = useMemo(
-    () => generations.reduce((total, generation) => total + generation.text.length, 0),
-    [generations],
-  );
-  const customVoiceCount = voices?.custom.length ?? 0;
-  const systemVoiceCount = voices?.system.length ?? 0;
-  const totalVoiceCount = customVoiceCount + systemVoiceCount;
-  const averageLength = generations.length ? Math.round(totalCharacters / generations.length) : 0;
-
-  useEffect(() => {
-    setLastReadCount(Number(localStorage.getItem("sonicra_notif_read") ?? 0));
-  }, []);
+  const allVoices = useMemo(() => [...(voiceGroups?.custom ?? []), ...(voiceGroups?.system ?? [])], [voiceGroups]);
+  const totalCharacters = useMemo(() => generations.reduce((total, generation) => total + generation.text.length, 0), [generations]);
+  const usagePercent = Math.min(100, Math.round((totalCharacters / FREE_TIER_LIMIT) * 100));
 
   const comparison = useMemo(() => {
-    const now = new Date();
-    const currentStart = new Date(now);
+    const currentStart = new Date();
     currentStart.setHours(0, 0, 0, 0);
     currentStart.setDate(currentStart.getDate() - 6);
     const previousStart = new Date(currentStart);
     previousStart.setDate(previousStart.getDate() - 7);
-
-    const current = generations.filter((generation) => new Date(generation.createdAt) >= currentStart);
-    const previous = generations.filter((generation) => {
-      const date = new Date(generation.createdAt);
+    const current = generations.filter((item) => new Date(item.createdAt) >= currentStart);
+    const previous = generations.filter((item) => {
+      const date = new Date(item.createdAt);
       return date >= previousStart && date < currentStart;
     });
-
-    const currentCharacters = current.reduce((total, generation) => total + generation.text.length, 0);
-    const previousCharacters = previous.reduce((total, generation) => total + generation.text.length, 0);
-
+    const currentCharacters = current.reduce((sum, item) => sum + item.text.length, 0);
+    const previousCharacters = previous.reduce((sum, item) => sum + item.text.length, 0);
     return {
-      generationDelta: getDelta(current.length, previous.length),
-      characterDelta: getDelta(currentCharacters, previousCharacters),
+      generations: getDelta(current.length, previous.length),
+      characters: getDelta(currentCharacters, previousCharacters),
     };
   }, [generations]);
 
-  const chartData = useMemo(() => {
-    const days = periodDays[period];
-    return Array.from({ length: days }, (_, index) => {
-      const date = new Date();
-      date.setHours(0, 0, 0, 0);
-      date.setDate(date.getDate() - (days - 1 - index));
-      const dailyGenerations = generations.filter(
-        (generation) => new Date(generation.createdAt).toDateString() === date.toDateString(),
-      );
-
-      return {
-        label: date.toLocaleDateString("en-US", days > 14 ? { month: "short", day: "numeric" } : { weekday: "short" }),
-        generations: dailyGenerations.length,
-        characters: dailyGenerations.reduce((total, generation) => total + generation.text.length, 0),
-      };
-    });
-  }, [generations, period]);
-
-  const voiceUsage = useMemo(() => {
-    const counts = new Map<string, number>();
-    generations.forEach((generation) => {
-      counts.set(generation.voiceName, (counts.get(generation.voiceName) ?? 0) + 1);
-    });
-    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const maximum = ranked[0]?.[1] ?? 1;
-    return ranked.map(([name, count]) => ({ name, count, width: Math.round((count / maximum) * 100) }));
-  }, [generations]);
-
-  const recentNotifications = generations.slice(0, 5);
-  const unreadCount = Math.max(0, recentNotifications.length - lastReadCount);
-  const chartHasData = chartData.some((item) => item.generations > 0);
-  const usagePercent = Math.min(100, Math.round((totalCharacters / FREE_TIER_LIMIT) * 100));
-  const estimatedUsageCost = billing?.hasActiveSubscription
-    ? (billing.estimatedCostCents ?? 0) / 100
-    : totalCharacters * COST_PER_UNIT;
-
-  function toggleNotifications() {
-    setNotificationsOpen((open) => !open);
-    if (!notificationsOpen) {
-      setLastReadCount(recentNotifications.length);
-      localStorage.setItem("sonicra_notif_read", String(recentNotifications.length));
+  function managePlan() {
+    if (!billing?.hasActiveSubscription) {
+      checkout();
+      return;
     }
-  }
-
-  function openPortal() {
     portalMutation.mutate(undefined, {
       onSuccess: ({ portalUrl }) => window.open(portalUrl, "_blank", "noopener,noreferrer"),
     });
   }
 
   return (
-    <div className="min-h-full">
+    <div className="min-h-full bg-[#f7f8fc]">
       <VoiceCreateDialog open={voiceDialogOpen} onOpenChange={setVoiceDialogOpen} />
-      <PageHeader
-        title={billingView ? "Billing & usage" : "Studio overview"}
-        description={billingView ? "Plan controls and metered character usage" : "Performance, activity, and voice operations"}
-      />
 
-      <div className="mx-auto w-full max-w-[1480px] px-4 py-5 lg:px-7 lg:py-7">
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <div className="inline-flex h-8 items-center rounded-md border bg-card p-0.5 shadow-sm">
-            <button
-              type="button"
-              onClick={() => router.replace("/")}
-              className={cn("h-7 rounded px-3 text-xs font-semibold transition-colors", !billingView ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}
-            >
-              Overview
-            </button>
-            <button
-              type="button"
-              onClick={() => router.replace("/?view=billing")}
-              className={cn("h-7 rounded px-3 text-xs font-semibold transition-colors", billingView ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}
-            >
-              Billing
-            </button>
+      <header className="mx-auto flex min-h-[104px] w-full max-w-[1600px] items-center justify-between gap-5 px-4 py-6 sm:px-6 lg:px-8">
+        <div className="flex min-w-0 items-center gap-3">
+          <SidebarTrigger className="size-9 shrink-0 rounded-lg border bg-white md:hidden" />
+          <div className="min-w-0">
+            <h1 className="flex flex-wrap items-center gap-2 text-[22px] font-bold leading-tight text-[#111323] sm:text-[24px]">
+              <span>{billingView ? "Billing & usage" : `${greeting}${user?.firstName ? `, ${user.firstName}` : ""}`}</span>
+              {!billingView && <span role="img" aria-label="Waving hand" className="text-[22px]">👋</span>}
+            </h1>
+            <p className="mt-1.5 text-[12px] text-[#69758d] sm:text-[13px]">
+              {billingView ? "Manage your plan and character allowance." : "Create lifelike voices in seconds with the power of AI."}
+            </p>
           </div>
+        </div>
 
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <Button variant="outline" className="hidden h-10 rounded-xl border-[#d9d4ff] bg-white px-4 text-[12px] font-semibold text-[#5b46e5] shadow-[0_5px_16px_rgba(61,72,120,0.035)] hover:border-[#c9c1ff] hover:bg-[#f5f3ff] sm:flex" onClick={managePlan} disabled={checkoutPending || portalMutation.isPending}>
+            <Star className="size-4 fill-current" />
+            {billing?.hasActiveSubscription ? "Manage plan" : "Upgrade plan"}
+          </Button>
           <div className="relative">
-            <Button variant="outline" size="icon-sm" onClick={toggleNotifications} className="relative bg-card" aria-label="Open notifications">
+            <Button variant="outline" size="icon" className="size-10 rounded-full border-[#e2e6ef] bg-white text-[#22283a] shadow-[0_5px_16px_rgba(61,72,120,0.035)] hover:border-[#d9d4ff] hover:bg-[#f5f3ff] hover:text-[#5b46e5]" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications">
               <Bell className="size-4" />
-              {unreadCount > 0 && <span className="absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-background bg-[#ef765f]" />}
+              {generations.length > 0 && <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary" />}
             </Button>
             {notificationsOpen && (
-              <div className="absolute right-0 top-10 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-lg border bg-popover shadow-xl">
+              <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div>
-                    <p className="text-sm font-semibold">Recent activity</p>
-                    <p className="text-[11px] text-muted-foreground">Latest audio generations</p>
+                    <p className="text-[13px] font-semibold">Recent activity</p>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">Latest completed generations</p>
                   </div>
-                  <button type="button" onClick={() => setNotificationsOpen(false)} className="text-muted-foreground hover:text-foreground" aria-label="Close notifications">
-                    <X className="size-4" />
-                  </button>
+                  <Button variant="ghost" size="icon-sm" onClick={() => setNotificationsOpen(false)} aria-label="Close notifications"><X className="size-4" /></Button>
                 </div>
-                <div className="max-h-72 divide-y overflow-y-auto">
-                  {recentNotifications.length ? recentNotifications.map((generation) => (
-                    <Link key={generation.id} href={`/text-to-speech/${generation.id}`} onClick={() => setNotificationsOpen(false)} className="flex gap-3 px-4 py-3 transition-colors hover:bg-muted/60">
-                      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
-                        <AudioLines className="size-3.5" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-semibold">{generation.voiceName}</p>
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{generation.text}</p>
-                        <p className="mt-1 text-[10px] text-muted-foreground">{timeAgo(generation.createdAt)}</p>
-                      </div>
+                <div className="max-h-72 divide-y overflow-auto">
+                  {generations.slice(0, 5).map((generation) => (
+                    <Link key={generation.id} href={`/text-to-speech/${generation.id}`} className="block px-4 py-3 hover:bg-accent/60" onClick={() => setNotificationsOpen(false)}>
+                      <p className="truncate text-[11px] font-semibold">{generation.text}</p>
+                      <p className="mt-1 text-[10px] text-muted-foreground">{generation.voiceName} · {timeAgo(generation.createdAt)}</p>
                     </Link>
-                  )) : <p className="px-4 py-8 text-center text-xs text-muted-foreground">No activity yet</p>}
+                  ))}
+                  {!generations.length && <p className="px-4 py-8 text-center text-[11px] text-muted-foreground">No activity yet.</p>}
                 </div>
               </div>
             )}
           </div>
+          <div className="flex items-center gap-2.5 border-l border-[#e3e6ee] pl-3.5">
+            <UserButton appearance={{ elements: { avatarBox: "size-10! ring-2! ring-white! shadow-sm!" } }} />
+            <div className="hidden min-w-0 lg:block">
+              <p className="max-w-28 truncate text-[12px] font-semibold text-[#151827]">{user?.firstName ?? "Account"}</p>
+              <p className="mt-0.5 text-[9px] text-[#7a8499]">{billing?.hasActiveSubscription ? "Pro Plan" : "Free Plan"}</p>
+            </div>
+            <ChevronDown className="hidden size-3.5 text-[#667085] lg:block" />
+          </div>
         </div>
+      </header>
 
+      <main className="mx-auto w-full max-w-[1600px] px-4 pb-8 sm:px-6 lg:px-8">
         {billingView ? (
-          <div className="space-y-5">
-            <section className="grid gap-4 lg:grid-cols-[1.35fr_0.65fr]">
-              <div className="overflow-hidden rounded-lg border bg-card">
-                <div className="flex flex-col justify-between gap-6 p-5 sm:flex-row sm:items-center lg:p-6">
-                  <div>
-                    <div className="mb-3 flex items-center gap-2">
-                      <span className="rounded bg-accent px-2 py-1 text-[10px] font-bold uppercase text-accent-foreground">
-                        {billing?.hasActiveSubscription ? "Active" : "Free tier"}
-                      </span>
-                      <span className="text-xs text-muted-foreground">Workspace plan</span>
-                    </div>
-                    <h2 className="text-2xl font-semibold">{billing?.hasActiveSubscription ? "Sonicra Pro" : "Sonicra Free"}</h2>
-                    <p className="mt-1 max-w-lg text-sm text-muted-foreground">
-                      {billing?.hasActiveSubscription ? "Metered voice generation with premium voices and custom cloning." : "10,000 characters included before a subscription is required."}
-                    </p>
-                  </div>
-                  {billing?.hasActiveSubscription ? (
-                    <Button onClick={openPortal} disabled={portalMutation.isPending} className="shrink-0">
-                      <CreditCard className="size-4" />
-                      Manage plan
-                    </Button>
-                  ) : (
-                    <Button onClick={checkout} disabled={checkoutPending} className="shrink-0">
-                      <Sparkles className="size-4" />
-                      Upgrade to Pro
-                    </Button>
-                  )}
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,0.7fr)]">
+            <section className="rounded-2xl border bg-white p-6 shadow-[0_8px_28px_rgba(15,23,42,0.035)]">
+              <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
+                <div>
+                  <span className="rounded-md bg-accent px-2 py-1 text-[10px] font-semibold text-primary">{billing?.hasActiveSubscription ? "ACTIVE" : "FREE TIER"}</span>
+                  <h2 className="mt-4 text-[22px] font-bold">{billing?.hasActiveSubscription ? "Sonicra Pro" : "Sonicra Free"}</h2>
+                  <p className="mt-2 max-w-xl text-[12px] leading-5 text-muted-foreground">{billing?.hasActiveSubscription ? "Metered generation with premium workspace capabilities." : "10,000 characters are included before an active subscription is required."}</p>
                 </div>
-                <div className="grid border-t sm:grid-cols-3 sm:divide-x">
-                  {[
-                    { label: "Characters generated", value: totalCharacters.toLocaleString() },
-                    { label: "Estimated usage", value: `$${estimatedUsageCost.toFixed(2)}` },
-                    { label: "Generation rate", value: "$0.30 / 1k" },
-                  ].map((item) => (
-                    <div key={item.label} className="px-5 py-4">
-                      <p className="text-[11px] text-muted-foreground">{item.label}</p>
-                      <p className="mt-1 text-lg font-semibold tabular-nums">{item.value}</p>
-                    </div>
-                  ))}
-                </div>
+                <Button onClick={managePlan} disabled={checkoutPending || portalMutation.isPending} className="h-10 rounded-lg"><Crown className="size-4" />{billing?.hasActiveSubscription ? "Manage plan" : "Upgrade to Pro"}</Button>
               </div>
-
-              <div className="rounded-lg border bg-foreground p-5 text-background lg:p-6">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-background/65">Current allowance</p>
-                  <CircleDollarSign className="size-4 text-primary" />
-                </div>
-                <p className="mt-5 text-3xl font-semibold tabular-nums">{formatCompact(totalCharacters)}</p>
-                <p className="mt-1 text-xs text-background/55">of {FREE_TIER_LIMIT.toLocaleString()} free characters</p>
-                <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-background/15">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${usagePercent}%` }} />
-                </div>
-                <p className="mt-2 text-[11px] text-background/55">{Math.max(0, FREE_TIER_LIMIT - totalCharacters).toLocaleString()} characters remaining</p>
+              <div className="mt-7 grid gap-3 border-t pt-6 sm:grid-cols-3">
+                <MetricCard label="Characters generated" value={totalCharacters.toLocaleString()} detail="All time" icon={BookOpenText} iconClassName="bg-violet-50 text-primary" />
+                <MetricCard label="Generations" value={generations.length.toLocaleString()} detail="Completed audio" icon={AudioLines} iconClassName="bg-blue-50 text-blue-600" />
+                <MetricCard label="Available voices" value={allVoices.length.toLocaleString()} detail={`${voiceGroups?.custom.length ?? 0} custom`} icon={Mic2} iconClassName="bg-[#edf4ff] text-[#2876f3]" />
               </div>
             </section>
-
-            <section className="rounded-lg border bg-card">
-              <div className="border-b px-5 py-4">
-                <h3 className="text-sm font-semibold">What your workspace includes</h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">Production capabilities already connected to this organization.</p>
-              </div>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-4">
-                {[
-                  "20 built-in voices",
-                  "Custom voice cloning",
-                  "5,000 characters per generation",
-                  "Full generation history",
-                ].map((feature) => (
-                  <div key={feature} className="flex items-center gap-2.5 border-b px-5 py-4 last:border-b-0 sm:border-r lg:border-b-0">
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground"><Check className="size-3" /></span>
-                    <span className="text-xs font-medium">{feature}</span>
-                  </div>
-                ))}
-              </div>
+            <section className="rounded-2xl border bg-white p-6 shadow-[0_8px_28px_rgba(15,23,42,0.035)]">
+              <div className="flex items-center justify-between"><h2 className="text-[14px] font-bold">Free allowance</h2><CircleDollarSign className="size-5 text-primary" /></div>
+              <p className="mt-8 text-[34px] font-bold tabular-nums">{compactNumber(totalCharacters)}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">of {FREE_TIER_LIMIT.toLocaleString()} characters</p>
+              <div className="mt-6 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-primary" style={{ width: `${usagePercent}%` }} /></div>
+              <div className="mt-3 flex items-center justify-between text-[10px] text-muted-foreground"><span>{usagePercent}% used</span><span>{Math.max(0, FREE_TIER_LIMIT - totalCharacters).toLocaleString()} remaining</span></div>
+              <Button variant="outline" className="mt-7 h-9 w-full rounded-lg text-[11px]" onClick={() => router.push("/")}>Back to dashboard</Button>
             </section>
           </div>
         ) : (
           <div className="space-y-5">
-            <section className="studio-grid relative overflow-hidden rounded-lg border bg-card p-5 lg:p-6">
-              <div className="absolute inset-y-0 right-0 hidden w-[38%] bg-[linear-gradient(90deg,transparent,var(--card))] lg:block" />
-              <div className="relative flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
-                <div>
-                  <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-primary">
-                    <span className="size-1.5 rounded-full bg-primary" />
-                    Voice workspace ready
-                  </div>
-                  <h2 className="max-w-xl text-2xl font-semibold leading-tight lg:text-[28px]">
-                    {user?.firstName ? `Good to see you, ${user.firstName}.` : "Your audio studio is ready."}
-                  </h2>
-                  <p className="mt-2 max-w-xl text-sm text-muted-foreground">
-                    Turn a script into polished speech, reuse a proven voice, or clone a new one for this workspace.
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button variant="outline" onClick={() => setVoiceDialogOpen(true)} className="bg-card">
-                    <Mic2 className="size-4" />
-                    Clone voice
-                  </Button>
-                  <Button asChild>
-                    <Link href="/text-to-speech">
-                      <AudioLines className="size-4" />
-                      Create audio
-                    </Link>
-                  </Button>
-                </div>
-              </div>
+            <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard label="Voices generated" value={generations.length.toLocaleString()} delta={comparison.generations} detail="vs previous 7 days" icon={AudioLines} iconClassName="bg-[#efecff] text-[#6755f5]" />
+              <MetricCard label="Characters generated" value={compactNumber(totalCharacters)} delta={comparison.characters} detail="vs previous 7 days" icon={BookOpenText} iconClassName="bg-[#edf4ff] text-[#2876f3]" />
+              <MetricCard label="Voices available" value={allVoices.length.toLocaleString()} detail={`${voiceGroups?.custom.length ?? 0} custom · ${voiceGroups?.system.length ?? 0} built-in`} icon={Library} iconClassName="bg-[#fff3e8] text-[#f07a22]" />
+              <MetricCard label="Free allowance used" value={`${usagePercent}%`} detail="of 10,000 characters" icon={Users} iconClassName="bg-[#edf3ff] text-[#2864f0]" />
             </section>
 
-            <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              {[
-                { label: "Total generations", value: formatCompact(generations.length), icon: AudioLines, delta: comparison.generationDelta, note: "vs previous 7 days" },
-                { label: "Characters used", value: formatCompact(totalCharacters), icon: Clock3, delta: comparison.characterDelta, note: "vs previous 7 days" },
-                { label: "Average script", value: formatCompact(averageLength), icon: WandSparkles, note: "characters per generation" },
-                { label: "Voice library", value: formatCompact(totalVoiceCount), icon: Library, note: `${customVoiceCount} custom, ${systemVoiceCount} built-in` },
-              ].map((metric) => (
-                <div key={metric.label} className="rounded-lg border bg-card p-4 lg:p-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-[11px] font-medium text-muted-foreground">{metric.label}</p>
-                    <metric.icon className="size-4 text-muted-foreground/70" strokeWidth={1.7} />
+            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="space-y-5">
+                <QuickCreate voices={allVoices} />
+                <VoiceLibrary voices={allVoices} />
+                <section className="flex flex-col items-start justify-between gap-4 rounded-2xl border border-primary/10 bg-accent px-5 py-5 sm:flex-row sm:items-center sm:px-6">
+                  <div className="flex items-center gap-4">
+                    <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-white text-primary shadow-sm"><WandSparkles className="size-5" /></span>
+                    <div><h2 className="text-[13px] font-bold">Create a voice that belongs to your brand</h2><p className="mt-1 text-[10px] text-muted-foreground">Add a custom voice to this workspace and use it in the studio.</p></div>
                   </div>
-                  <p className="mt-3 text-2xl font-semibold tabular-nums lg:text-[28px]">{metric.value}</p>
-                  <MetricDelta value={metric.delta} label={metric.note} />
-                </div>
-              ))}
-            </section>
-
-            <section className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,0.65fr)]">
-              <div className="rounded-lg border bg-card">
-                <div className="flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between lg:px-5">
-                  <div>
-                    <h3 className="text-sm font-semibold">Generation activity</h3>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">Completed audio jobs over time</p>
-                  </div>
-                  <div className="inline-flex w-fit rounded-md bg-muted p-0.5">
-                    {(["7d", "14d", "30d"] as Period[]).map((item) => (
-                      <button key={item} type="button" onClick={() => setPeriod(item)} className={cn("h-7 rounded px-2.5 text-[11px] font-semibold", period === item ? "bg-card text-foreground shadow-sm" : "text-muted-foreground")}>
-                        {item}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="h-[280px] px-2 pb-3 pt-5 sm:px-4">
-                  {chartHasData ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={chartData} margin={{ top: 8, right: 12, left: -18, bottom: 0 }}>
-                        <CartesianGrid vertical={false} stroke="#e7e9e4" strokeDasharray="3 5" />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#7a827e", fontSize: 11 }} interval={period === "30d" ? 5 : 0} />
-                        <YAxis axisLine={false} tickLine={false} allowDecimals={false} tick={{ fill: "#7a827e", fontSize: 11 }} />
-                        <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "#9aa29d", strokeDasharray: "3 4" }} />
-                        <Line type="monotone" dataKey="generations" name="Generations" stroke="#0f766e" strokeWidth={2.25} dot={false} activeDot={{ r: 4, fill: "#0f766e", stroke: "#ffffff", strokeWidth: 2 }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="flex h-full flex-col items-center justify-center">
-                      <div className="mb-3 flex size-10 items-center justify-center rounded-lg bg-muted"><AudioLines className="size-4 text-muted-foreground" /></div>
-                      <p className="text-sm font-semibold">No activity in this range</p>
-                      <Link href="/text-to-speech" className="mt-1 text-xs font-medium text-primary hover:underline">Create the first generation</Link>
-                    </div>
-                  )}
-                </div>
+                  <Button className="h-9 rounded-lg px-5 text-[11px] font-semibold" onClick={() => setVoiceDialogOpen(true)}><Mic2 className="size-4" />Clone a voice</Button>
+                </section>
               </div>
-
-              <div className="rounded-lg border bg-card p-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-semibold">Character allowance</h3>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">Free-tier usage</p>
-                  </div>
-                  <CircleDollarSign className="size-4 text-primary" />
-                </div>
-                <div className="mt-8 flex items-end justify-between gap-3">
-                  <p className="text-3xl font-semibold tabular-nums">{formatCompact(totalCharacters)}</p>
-                  <p className="pb-1 text-xs text-muted-foreground">of {formatCompact(FREE_TIER_LIMIT)}</p>
-                </div>
-                <div className="mt-4 h-2 overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${usagePercent}%` }} />
-                </div>
-                <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-                  <span>{usagePercent}% used</span>
-                  <span>{Math.max(0, FREE_TIER_LIMIT - totalCharacters).toLocaleString()} left</span>
-                </div>
-                <div className="mt-7 border-t pt-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Estimated value</span>
-                    <span className="text-sm font-semibold tabular-nums">${estimatedUsageCost.toFixed(2)}</span>
-                  </div>
-                  <button type="button" onClick={() => router.replace("/?view=billing")} className="mt-4 flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
-                    Review billing <ChevronRight className="size-3" />
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            <section className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,0.8fr)]">
-              <div className="overflow-hidden rounded-lg border bg-card">
-                <div className="flex items-center justify-between border-b px-4 py-4 lg:px-5">
-                  <div>
-                    <h3 className="text-sm font-semibold">Recent generations</h3>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">Latest audio created by this workspace</p>
-                  </div>
-                  <Link href="/text-to-speech" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">View all <ChevronRight className="size-3" /></Link>
-                </div>
-                {generations.length ? (
-                  <div className="divide-y">
-                    {generations.slice(0, 6).map((generation, index) => (
-                      <Link key={generation.id} href={`/text-to-speech/${generation.id}`} className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/45 lg:grid-cols-[36px_minmax(0,1fr)_130px_80px_90px] lg:px-5">
-                        <span className="flex size-8 items-center justify-center rounded-md border bg-background text-muted-foreground">
-                          {index === 0 ? <Pause className="size-3.5" /> : <Play className="ml-0.5 size-3.5" />}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-semibold">{generation.text}</p>
-                          <p className="mt-1 text-[10px] text-muted-foreground lg:hidden">{generation.voiceName} · {generation.text.length} chars</p>
-                        </div>
-                        <span className="hidden truncate text-xs text-muted-foreground lg:block">{generation.voiceName}</span>
-                        <span className="hidden text-xs tabular-nums text-muted-foreground lg:block">{generation.text.length}</span>
-                        <span className="text-right text-[11px] text-muted-foreground">{timeAgo(generation.createdAt)}</span>
-                      </Link>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="px-5 py-12 text-center">
-                    <p className="text-sm font-semibold">Nothing generated yet</p>
-                    <p className="mt-1 text-xs text-muted-foreground">Your completed audio will appear here.</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-lg border bg-card">
-                <div className="flex items-center justify-between border-b px-5 py-4">
-                  <div>
-                    <h3 className="text-sm font-semibold">Most-used voices</h3>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">Ranked by generation count</p>
-                  </div>
-                  <Mic2 className="size-4 text-muted-foreground" />
-                </div>
-                <div className="space-y-4 p-5">
-                  {voiceUsage.length ? voiceUsage.map((voice, index) => (
-                    <div key={voice.name}>
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span className="text-[10px] font-semibold text-muted-foreground">0{index + 1}</span>
-                          <span className="truncate text-xs font-semibold">{voice.name}</span>
-                        </div>
-                        <span className="text-[11px] tabular-nums text-muted-foreground">{voice.count} jobs</span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-[#ef765f]" style={{ width: `${voice.width}%` }} /></div>
-                    </div>
-                  )) : <p className="py-8 text-center text-xs text-muted-foreground">Voice rankings appear after generation.</p>}
-                </div>
-                <div className="border-t px-5 py-3">
-                  <Link href="/voices" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">Open voice library <ChevronRight className="size-3" /></Link>
-                </div>
-              </div>
-            </section>
+              <aside className="space-y-5">
+                <RecentGenerations generations={generations} />
+                <UsageOverview generations={generations} usagePercent={usagePercent} />
+              </aside>
+            </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }

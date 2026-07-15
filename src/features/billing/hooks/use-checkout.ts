@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useTRPC } from "@/trpc/client";
 
 export function useCheckout() {
@@ -11,7 +12,10 @@ export function useCheckout() {
     const checkout = useCallback(() => {
     mutation.mutate(undefined, {
       onSuccess: (data) => {
-        window.location.href = data.checkoutUrl;
+        window.location.assign(data.checkoutUrl);
+      },
+      onError: (error) => {
+        toast.error(error.message || "Unable to start checkout");
       },
     });
   }, [mutation]);

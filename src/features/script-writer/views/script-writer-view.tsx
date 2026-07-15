@@ -24,6 +24,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { SCRIPT_FORMATS } from "../data/formats";
 
+const DETAILS_MAX_LENGTH = 4_000;
+
 const FORMAT_ICONS: Record<string, React.ReactNode> = {
   "podcast-intro": <Mic className="size-4 text-primary" />,
   "ad-15": <Megaphone className="size-4 text-rose-600" />,
@@ -37,7 +39,9 @@ const FORMAT_ICONS: Record<string, React.ReactNode> = {
 
 export function ScriptWriterView() {
   const router = useRouter();
-  const [selectedFormat, setSelectedFormat] = useState(SCRIPT_FORMATS[0].id);
+  const [selectedFormat, setSelectedFormat] = useState<
+    (typeof SCRIPT_FORMATS)[number]["id"]
+  >(SCRIPT_FORMATS[0].id);
   const [details, setDetails] = useState("");
   const [script, setScript] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -141,11 +145,12 @@ export function ScriptWriterView() {
                   onChange={(event) => setDetails(event.target.value)}
                   placeholder={`Describe the audience, message, tone, and important details for this ${format.label.toLowerCase()}...`}
                   className="min-h-44 resize-none bg-background p-4 text-sm leading-6 shadow-none placeholder:text-muted-foreground/55"
+                  maxLength={DETAILS_MAX_LENGTH}
                 />
               </div>
 
               <div className="flex flex-col gap-3 border-t bg-background/55 px-4 py-3 sm:flex-row sm:items-center sm:justify-between lg:px-5">
-                <p className="text-[11px] text-muted-foreground">{details.length.toLocaleString()} characters in brief</p>
+                <p className="text-[11px] text-muted-foreground">{details.length.toLocaleString()} / {DETAILS_MAX_LENGTH.toLocaleString()} characters</p>
                 <Button onClick={generateScript} disabled={isGenerating || !details.trim()} size="sm">
                   {isGenerating ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
                   {isGenerating ? "Writing script..." : "Generate script"}

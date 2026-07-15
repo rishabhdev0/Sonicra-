@@ -14,7 +14,7 @@ const t = initTRPC.create({
 
 const sentryMiddleware = t.middleware(
   Sentry.trpcMiddleware({
-    attachRpcInput: true,
+    attachRpcInput: false,
   }),
 );
 
@@ -34,16 +34,30 @@ export const authProcedure = baseProcedure.use(async ({ next }) => {
   });
 });
 
-// ✅ FIXED: falls back to userId if no orgId
 export const orgProcedure = baseProcedure.use(async ({ next }) => {
-  const { userId, orgId } = await auth();
+  const { userId, orgId, orgRole } = await auth();
 
   if (!userId) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
 
-  // Use orgId if available, otherwise fall back to userId
-  const scopeId = orgId ?? userId;
+  if (!orgId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "An active organization is required",
+    });
+  }
 
-  return next({ ctx: { userId, orgId: scopeId } });
+  return next({ ctx: { userId, orgId, orgRole } });
+});
+
+export const orgAdminProcedure = orgProcedure.use(async ({ ctx, next }) => {
+  if (ctx.orgRole !== "org:admin") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Organization admin access is required",
+    });
+  }
+
+  return next({ ctx });
 });

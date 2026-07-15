@@ -9,14 +9,15 @@ import { useMutation } from "@tanstack/react-query";
 import { useTRPC } from "@/trpc/client";
 import { useAppForm } from "@/hooks/use-app-form";
 import { useCheckout } from "@/features/billing/hooks/use-checkout";
+import { TEXT_MAX_LENGTH } from "@/features/text-to-speech/data/constants";
 
 const ttsFormSchema = z.object({
-  text: z.string().min(1, "Please enter some text"),
+  text: z.string().trim().min(1, "Please enter some text").max(TEXT_MAX_LENGTH),
   voiceId: z.string().min(1, "Please select a voice"),
-  temperature: z.number(),
-  topP: z.number(),
-  topK: z.number(),
-  repetitionPenalty: z.number(),
+  temperature: z.number().min(0).max(2),
+  topP: z.number().min(0).max(1),
+  topK: z.number().int().min(1).max(10_000),
+  repetitionPenalty: z.number().min(1).max(2),
 });
 
 export type TTSFormValues = z.infer<typeof ttsFormSchema>;

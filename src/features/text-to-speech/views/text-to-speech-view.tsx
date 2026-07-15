@@ -34,17 +34,11 @@ export function TextToSpeechView({
 
   useEffect(() => {
     const stored = sessionStorage.getItem("tts-prefill");
-    if (stored) {
-      setPrefillText(stored);
-      sessionStorage.removeItem("tts-prefill");
-    }
-  }, []);
+    if (!stored) return;
 
-  // Warmup ping
-  useEffect(() => {
-    fetch(process.env.NEXT_PUBLIC_CHATTERBOX_API_URL + "/health", {
-      method: "GET",
-    }).catch(() => {});
+    sessionStorage.removeItem("tts-prefill");
+    const timer = window.setTimeout(() => setPrefillText(stored), 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const { custom: customVoices, system: systemVoices } = voices;

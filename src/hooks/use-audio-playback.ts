@@ -4,15 +4,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export function useAudioPlayback(src: string | File | null) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [playback, setPlayback] = useState<{
+    source: string | File | null;
+    isPlaying: boolean;
+    isLoading: boolean;
+  }>({ source: null, isPlaying: false, isLoading: false });
+
+  const isCurrentSource = playback.source === src;
+  const isPlaying = isCurrentSource && playback.isPlaying;
+  const isLoading = isCurrentSource && playback.isLoading;
 
   useEffect(() => {
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
+        const currentSrc = audioRef.current.src;
         audioRef.current.removeAttribute("src");
         audioRef.current = null;
+        if (src instanceof File && currentSrc.startsWith("blob:")) {
+          URL.revokeObjectURL(currentSrc);
+        }
       }
     };
   }, [src]);
@@ -23,23 +34,28 @@ export function useAudioPlayback(src: string | File | null) {
     if (!audioRef.current) {
       const url = src instanceof File ? URL.createObjectURL(src) : src;
       audioRef.current = new Audio(url);
-      audioRef.current.addEventListener("ended", () => setIsPlaying(false));
+      audioRef.current.addEventListener("ended", () => {
+        setPlayback({ source: src, isPlaying: false, isLoading: false });
+      });
       audioRef.current.addEventListener(
         "canplaythrough",
-        () => setIsLoading(false),
+        () => setPlayback((current) => ({ ...current, isLoading: false })),
         { once: true },
       );
     }
 
     if (isPlaying) {
       audioRef.current.pause();
-      setIsPlaying(false);
+      setPlayback({ source: src, isPlaying: false, isLoading: false });
     } else {
-      setIsLoading(true);
-      audioRef.current.play().then(() => {
-        setIsPlaying(true);
-        setIsLoading(false);
-      });
+      setPlayback({ source: src, isPlaying: false, isLoading: true });
+      audioRef.current.play()
+        .then(() => {
+          setPlayback({ source: src, isPlaying: true, isLoading: false });
+        })
+        .catch(() => {
+          setPlayback({ source: src, isPlaying: false, isLoading: false });
+        });
     }
   }, [src, isPlaying]);
 

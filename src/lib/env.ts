@@ -7,7 +7,7 @@ export const env = createEnv({
     POLAR_SERVER: z.enum(["sandbox", "production"]).default("sandbox"),
     POLAR_PRODUCT_ID: z.string().min(1),
     DATABASE_URL: z.string().min(1),
-    APP_URL: z.string().min(1),
+    APP_URL: z.url(),
     R2_ACCOUNT_ID: z.string().min(1),
     R2_ACCESS_KEY_ID: z.string().min(1),
     R2_SECRET_ACCESS_KEY: z.string().min(1),

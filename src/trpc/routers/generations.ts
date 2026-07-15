@@ -4,18 +4,80 @@ import { polar } from "@/lib/polar";
 import { TRPCError } from "@trpc/server";
 import { chatterbox } from "@/lib/chatterbox-client";
 import { prisma } from "@/lib/db";
-import { uploadAudio } from "@/lib/r2";
+import { env } from "@/lib/env";
+import { deleteAudio, uploadAudio } from "@/lib/r2";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
+import { Prisma } from "@/generated/prisma/client";
 import { TEXT_MAX_LENGTH } from "@/features/text-to-speech/data/constants";
 import { createTRPCRouter, orgProcedure } from "../init";
 
 const FREE_TIER_LIMIT = 10000;
 
-async function getOrgCharacterUsage(orgId: string): Promise<number> {
-  const allGenerations = await prisma.generation.findMany({
-    where: { orgId },
-    select: { text: true },
+type GenerationReservation = {
+  orgId: string;
+  text: string;
+  voiceId: string;
+  voiceName: string;
+  temperature: number;
+  topP: number;
+  topK: number;
+  repetitionPenalty: number;
+  enforceFreeTier: boolean;
+};
+
+async function reserveGeneration(input: GenerationReservation) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          if (input.enforceFreeTier) {
+            const generations = await tx.generation.findMany({
+              where: { orgId: input.orgId },
+              select: { text: true },
+            });
+            const used = generations.reduce(
+              (sum, generation) => sum + generation.text.length,
+              0,
+            );
+
+            if (used + input.text.length > FREE_TIER_LIMIT) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "SUBSCRIPTION_REQUIRED",
+              });
+            }
+          }
+
+          return tx.generation.create({
+            data: {
+              orgId: input.orgId,
+              text: input.text,
+              voiceName: input.voiceName,
+              voiceId: input.voiceId,
+              temperature: input.temperature,
+              topP: input.topP,
+              topK: input.topK,
+              repetitionPenalty: input.repetitionPenalty,
+            },
+            select: { id: true },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      const shouldRetry =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2034" &&
+        attempt < 2;
+      if (shouldRetry) continue;
+      throw error;
+    }
+  }
+
+  throw new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message: "Unable to reserve generation capacity",
   });
-  return allGenerations.reduce((sum, g) => sum + g.text.length, 0);
 }
 
 async function generateAudio(
@@ -31,12 +93,12 @@ async function generateAudio(
   if (isLongText) {
     // ✅ Use /generate-long for chunking + merging
     const response = await fetch(
-      `${process.env.CHATTERBOX_API_URL}/generate-long`,
+      `${env.CHATTERBOX_API_URL}/generate-long`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": process.env.CHATTERBOX_API_KEY!,
+          "x-api-key": env.CHATTERBOX_API_KEY,
         },
         body: JSON.stringify({
           prompt: text,
@@ -82,8 +144,12 @@ export const generationsRouter = createTRPCRouter({
   getById: orgProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
-      const generation = await prisma.generation.findUnique({
-        where: { id: input.id, orgId: ctx.orgId },
+      const generation = await prisma.generation.findFirst({
+        where: {
+          id: input.id,
+          orgId: ctx.orgId,
+          r2ObjectKey: { not: null },
+        },
         omit: {
           orgId: true,
           r2ObjectKey: true,
@@ -102,7 +168,7 @@ export const generationsRouter = createTRPCRouter({
 
   getAll: orgProcedure.query(async ({ ctx }) => {
     const generations = await prisma.generation.findMany({
-      where: { orgId: ctx.orgId },
+      where: { orgId: ctx.orgId, r2ObjectKey: { not: null } },
       orderBy: { createdAt: "desc" },
       omit: {
         orgId: true,
@@ -116,7 +182,7 @@ export const generationsRouter = createTRPCRouter({
   create: orgProcedure
     .input(
       z.object({
-        text: z.string().min(1).max(TEXT_MAX_LENGTH),
+        text: z.string().trim().min(1).max(TEXT_MAX_LENGTH),
         voiceId: z.string().min(1),
         temperature: z.number().min(0).max(2).default(0.8),
         topP: z.number().min(0).max(1).default(0.95),
@@ -125,37 +191,24 @@ export const generationsRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ input, ctx }) => {
-
-      // ── Subscription + Free Tier Check ──────────────────────────────
       try {
-        const customerState = await polar.customers.getStateExternal({
-          externalId: ctx.orgId,
+        await enforceRateLimit({
+          scope: ctx.orgId,
+          action: "voice-generation",
+          limit: 10,
+          windowMs: 60_000,
         });
-        const hasActiveSubscription =
-          (customerState.activeSubscriptions ?? []).length > 0;
-
-        if (!hasActiveSubscription) {
-          const totalUsed = await getOrgCharacterUsage(ctx.orgId);
-          if (totalUsed + input.text.length > FREE_TIER_LIMIT) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "SUBSCRIPTION_REQUIRED",
-            });
-          }
-        }
-      } catch (err) {
-        if (err instanceof TRPCError) throw err;
-        const totalUsed = await getOrgCharacterUsage(ctx.orgId);
-        if (totalUsed + input.text.length > FREE_TIER_LIMIT) {
+      } catch (error) {
+        if (error instanceof RateLimitExceededError) {
           throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "SUBSCRIPTION_REQUIRED",
+            code: "TOO_MANY_REQUESTS",
+            message: `Too many generation requests. Retry in ${error.retryAfterSeconds} seconds.`,
           });
         }
+        throw error;
       }
-      // ────────────────────────────────────────────────────────────────
 
-      const voice = await prisma.voice.findUnique({
+      const voice = await prisma.voice.findFirst({
         where: {
           id: input.voiceId,
           OR: [
@@ -184,6 +237,33 @@ export const generationsRouter = createTRPCRouter({
         });
       }
 
+      let hasActiveSubscription = false;
+      try {
+        const customerState = await polar.customers.getStateExternal({
+          externalId: ctx.orgId,
+        });
+        hasActiveSubscription =
+          (customerState.activeSubscriptions ?? []).length > 0;
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { operation: "billing.subscriptionCheck" },
+        });
+      }
+
+      const generation = await reserveGeneration({
+        orgId: ctx.orgId,
+        text: input.text,
+        voiceId: voice.id,
+        voiceName: voice.name,
+        temperature: input.temperature,
+        topP: input.topP,
+        topK: input.topK,
+        repetitionPenalty: input.repetitionPenalty,
+        enforceFreeTier: !hasActiveSubscription,
+      });
+      const generationId = generation.id;
+      const r2ObjectKey = `generations/orgs/${ctx.orgId}/${generationId}`;
+
       Sentry.logger.info("Generation started", {
         orgId: ctx.orgId,
         voiceId: input.voiceId,
@@ -203,6 +283,9 @@ export const generationsRouter = createTRPCRouter({
           input.repetitionPenalty,
         );
       } catch {
+        await prisma.generation
+          .delete({ where: { id: generationId } })
+          .catch(() => {});
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to generate audio",
@@ -210,33 +293,14 @@ export const generationsRouter = createTRPCRouter({
       }
 
       const buffer = Buffer.from(audioData);
-      let generationId: string | null = null;
-      let r2ObjectKey: string | null = null;
+      let uploaded = false;
 
       try {
-        const generation = await prisma.generation.create({
-          data: {
-            orgId: ctx.orgId,
-            text: input.text,
-            voiceName: voice.name,
-            voiceId: voice.id,
-            temperature: input.temperature,
-            topP: input.topP,
-            topK: input.topK,
-            repetitionPenalty: input.repetitionPenalty,
-          },
-          select: {
-            id: true,
-          },
-        });
-
-        generationId = generation.id;
-        r2ObjectKey = `generations/orgs/${ctx.orgId}/${generation.id}`;
-
         await uploadAudio({ buffer, key: r2ObjectKey });
+        uploaded = true;
 
         await prisma.generation.update({
-          where: { id: generation.id },
+          where: { id: generationId },
           data: { r2ObjectKey },
         });
 
@@ -245,11 +309,10 @@ export const generationsRouter = createTRPCRouter({
           generationId: generation.id,
         });
       } catch {
-        if (generationId) {
-          await prisma.generation
-            .delete({ where: { id: generationId } })
-            .catch(() => {});
-        }
+        if (uploaded) await deleteAudio(r2ObjectKey).catch(() => {});
+        await prisma.generation
+          .delete({ where: { id: generationId } })
+          .catch(() => {});
 
         Sentry.logger.error("Generation failed", {
           orgId: ctx.orgId,
@@ -262,15 +325,8 @@ export const generationsRouter = createTRPCRouter({
         });
       }
 
-      if (!generationId || !r2ObjectKey) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to store generated audio",
-        });
-      }
-
-      polar.events
-        .ingest({
+      try {
+        await polar.events.ingest({
           events: [
             {
               name: "tts_generation",
@@ -279,13 +335,13 @@ export const generationsRouter = createTRPCRouter({
               timestamp: new Date(),
             },
           ],
-        })
-        .then(() => {
-          console.log("✅ Polar event ingested! orgId:", ctx.orgId, "chars:", input.text.length);
-        })
-        .catch((err) => {
-          console.error("❌ Polar event FAILED:", JSON.stringify(err, null, 2));
         });
+      } catch (error) {
+        Sentry.captureException(error, {
+          tags: { operation: "billing.ingestGenerationUsage" },
+          extra: { generationId, characterCount: input.text.length },
+        });
+      }
 
       return { id: generationId };
     }),

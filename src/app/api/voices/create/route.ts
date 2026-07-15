@@ -1,17 +1,19 @@
 import { auth } from "@clerk/nextjs/server";
+import * as Sentry from "@sentry/nextjs";
 import { parseBuffer } from "music-metadata";
 import { z } from "zod";
 import { polar } from "@/lib/polar";
 import { prisma } from "@/lib/db";
 import { uploadAudio } from "@/lib/r2";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import { VOICE_CATEGORIES } from "@/features/voices/data/voice-categories";
 import type { VoiceCategory } from "@/generated/prisma/client";
 
 const createVoiceSchema = z.object({
-  name: z.string().min(1, "Voice name is required"),
+  name: z.string().trim().min(1, "Voice name is required").max(80),
   category: z.enum(VOICE_CATEGORIES as [VoiceCategory, ...VoiceCategory[]]),
-  language: z.string().min(1, "Language is required"),
-  description: z.string().nullish(),
+  language: z.string().trim().min(2, "Language is required").max(35),
+  description: z.string().trim().max(500).nullish(),
 });
 
 const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -22,6 +24,26 @@ export async function POST(request: Request) {
 
   if (!userId || !orgId) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    await enforceRateLimit({
+      scope: orgId,
+      action: "voice-clone",
+      limit: 5,
+      windowMs: 60 * 60 * 1_000,
+    });
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) {
+      return Response.json(
+        { error: "Too many voice creation requests" },
+        {
+          status: 429,
+          headers: { "Retry-After": String(error.retryAfterSeconds) },
+        },
+      );
+    }
+    throw error;
   }
 
     // Check for active subscription before voice creation
@@ -60,6 +82,14 @@ export async function POST(request: Request) {
 
   const { name, category, language, description } = validation.data;
 
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_SIZE_BYTES) {
+    return Response.json(
+      { error: "Audio file exceeds the 20 MB size limit" },
+      { status: 413 },
+    );
+  }
+
   const fileBuffer = await request.arrayBuffer();
 
   if (!fileBuffer.byteLength) {
@@ -87,6 +117,13 @@ export async function POST(request: Request) {
 
   const normalizedContentType =
     contentType.split(";")[0]?.trim() || "audio/wav";
+
+  if (!normalizedContentType.startsWith("audio/")) {
+    return Response.json(
+      { error: "Content-Type must describe an audio file" },
+      { status: 415 },
+    );
+  }
 
   // Validate audio format and duration
   let duration: number;
@@ -164,9 +201,8 @@ export async function POST(request: Request) {
     );
   }
 
-  // Ingest usage event to Polar (fire-and-forget, don't block response)
-  polar.events
-    .ingest({
+  try {
+    await polar.events.ingest({
       events: [
         {
           name: "voice_creation",
@@ -175,10 +211,13 @@ export async function POST(request: Request) {
           timestamp: new Date(),
         },
       ],
-    })
-    .catch(() => {
-      // Silently fail - don't break the user experience for metering errors
     });
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { operation: "billing.ingestVoiceCreation" },
+      extra: { voiceId: createdVoiceId },
+    });
+  }
 
   return Response.json(
     { name, message: "Voice created successfully" },

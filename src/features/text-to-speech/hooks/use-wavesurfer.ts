@@ -11,17 +11,6 @@ interface UseWaveSurferOptions {
   onError?: (error: Error) => void;
 }
 
-interface UseWaveSurferReturn {
-  containerRef: React.RefObject<HTMLDivElement | null>;
-  isPlaying: boolean;
-  isReady: boolean;
-  currentTime: number;
-  duration: number;
-  togglePlayPause: () => void;
-  seekForward: (seconds?: number) => void;
-  seekBackward: (seconds?: number) => void;
-};
-
 export function useWaveSurfer({
   url,
   autoplay,
@@ -50,8 +39,8 @@ export function useWaveSurfer({
     const ws = WaveSurfer.create({
       container: containerRef.current,
       waveColor: "#96999D", // matches --muted-foreground
-      progressColor: "#4A8A9A", // matches --chart-1 (teal-cyan)
-      cursorColor: "#4A8A9A",
+      progressColor: "#6d5dfc",
+      cursorColor: "#6d5dfc",
       cursorWidth: 2,
       barWidth: 2,
       barGap: 2,
@@ -103,16 +92,22 @@ export function useWaveSurfer({
     const ws = wavesurferRef.current;
     if (!ws) return;
 
-    const newTime = Math.min(ws.getCurrentTime() + seconds, ws.getDuration());
-    ws.seekTo(newTime / ws.getDuration());
+    const duration = ws.getDuration();
+    if (!duration) return;
+
+    const newTime = Math.min(ws.getCurrentTime() + seconds, duration);
+    ws.seekTo(newTime / duration);
   }, []);
 
   const seekBackward = useCallback((seconds = 5) => {
     const ws = wavesurferRef.current;
     if (!ws) return;
 
+    const duration = ws.getDuration();
+    if (!duration) return;
+
     const newTime = Math.max(ws.getCurrentTime() - seconds, 0);
-    ws.seekTo(newTime / ws.getDuration());
+    ws.seekTo(newTime / duration);
   }, []);
 
   return {

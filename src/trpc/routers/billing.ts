@@ -1,19 +1,21 @@
 import { TRPCError } from "@trpc/server";
+import * as Sentry from "@sentry/nextjs";
 import { polar } from "@/lib/polar";
 import { env } from "@/lib/env";
-import { createTRPCRouter, orgProcedure } from "../init";
+import { createTRPCRouter, orgAdminProcedure, orgProcedure } from "../init";
+
+function billingUrl(path: string) {
+  return new URL(path, env.APP_URL).toString();
+}
 
 export const billingRouter = createTRPCRouter({
-  createCheckout: orgProcedure.mutation(async ({ ctx }) => {
-    console.log("ORG ID:", ctx.orgId);
-    console.log("POLAR_PRODUCT_ID:", env.POLAR_PRODUCT_ID);
-    console.log("APP_URL:", process.env.APP_URL);
-
+  createCheckout: orgAdminProcedure.mutation(async ({ ctx }) => {
     try {
       const result = await polar.checkouts.create({
         products: [env.POLAR_PRODUCT_ID],
         externalCustomerId: ctx.orgId,
-        successUrl: `${process.env.APP_URL}/dashboard?success=true`,
+        successUrl: billingUrl("/?view=billing&checkout=success"),
+        returnUrl: billingUrl("/?view=billing"),
       });
 
       if (!result.url) {
@@ -24,25 +26,43 @@ export const billingRouter = createTRPCRouter({
       }
 
       return { checkoutUrl: result.url };
-    } catch (e) {
-      console.error("POLAR ERROR:", JSON.stringify(e, null, 2));
-      throw e;
+    } catch (error) {
+      if (error instanceof TRPCError) throw error;
+      Sentry.captureException(error, {
+        tags: { operation: "billing.createCheckout" },
+      });
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Unable to start checkout. Please try again.",
+      });
     }
   }),
 
-  createPortalSession: orgProcedure.mutation(async ({ ctx }) => {
-    const result = await polar.customerSessions.create({
-      externalCustomerId: ctx.orgId,
-    });
+  createPortalSession: orgAdminProcedure.mutation(async ({ ctx }) => {
+    try {
+      const result = await polar.customerSessions.create({
+        externalCustomerId: ctx.orgId,
+        returnUrl: billingUrl("/?view=billing"),
+      });
 
-    if (!result.customerPortalUrl) {
+      if (!result.customerPortalUrl) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create customer portal session",
+        });
+      }
+
+      return { portalUrl: result.customerPortalUrl };
+    } catch (error) {
+      if (error instanceof TRPCError) throw error;
+      Sentry.captureException(error, {
+        tags: { operation: "billing.createPortalSession" },
+      });
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
-        message: "Failed to create customer portal session",
+        message: "Unable to open billing. Please try again.",
       });
     }
-
-    return { portalUrl: result.customerPortalUrl };
   }),
 
   getStatus: orgProcedure.query(async ({ ctx }) => {
