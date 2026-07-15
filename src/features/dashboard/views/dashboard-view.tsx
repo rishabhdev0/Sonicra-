@@ -8,6 +8,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import {
   AudioLines,
+  AudioWaveform,
   Bell,
   BookOpenText,
   ChevronDown,
@@ -81,7 +82,12 @@ function greetingForHour(hour: number) {
   if (hour >= 5 && hour < 12) return "Good morning";
   if (hour >= 12 && hour < 17) return "Good afternoon";
   if (hour >= 17 && hour < 22) return "Good evening";
-  return "Good night";
+  return "Night owl";
+}
+
+function capitalizeName(value?: string | null) {
+  if (!value) return "";
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function getDelta(current: number, previous: number) {
@@ -105,15 +111,15 @@ function MetricCard({
   iconClassName: string;
 }) {
   return (
-    <div className="min-h-32 rounded-2xl border border-[#e4e7ef] bg-white p-5 shadow-[0_10px_32px_rgba(74,85,125,0.045)]">
-      <div className="flex items-start gap-4">
-        <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-full", iconClassName)}>
-          <Icon className="size-5" strokeWidth={1.9} />
+    <div className="min-h-[148px] rounded-2xl border border-[#e4e7ef] bg-white p-4 shadow-[0_10px_32px_rgba(74,85,125,0.045)] sm:min-h-32 sm:p-5">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:gap-4">
+        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-full sm:size-11", iconClassName)}>
+          <Icon className="size-[18px] sm:size-5" strokeWidth={1.9} />
         </span>
         <div className="min-w-0">
-          <p className="text-[12px] font-medium text-[#526079]">{label}</p>
-          <p className="mt-1 text-[24px] font-bold leading-none tabular-nums text-[#111323]">{value}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px]">
+          <p className="text-[11px] font-medium leading-4 text-[#526079] sm:text-[12px]">{label}</p>
+          <p className="mt-1 text-[22px] font-bold leading-none tabular-nums text-[#111323] sm:text-[24px]">{value}</p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-1 text-[9px] sm:mt-3 sm:gap-1.5 sm:text-[10px]">
             {delta !== undefined && (
               <span className={cn("flex items-center gap-1 font-semibold", delta > 0 ? "text-[#2876f3]" : delta < 0 ? "text-rose-600" : "text-muted-foreground")}>
                 {delta > 0 ? <TrendingUp className="size-3" /> : delta < 0 ? <TrendingDown className="size-3" /> : null}
@@ -268,6 +274,29 @@ function RecentGenerations({ generations }: { generations: Generation[] }) {
   );
 }
 
+function ActivityPopover({ generations, onClose }: { generations: Generation[]; onClose: () => void }) {
+  return (
+    <div className="absolute right-0 top-11 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)] md:top-12">
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <div>
+          <p className="text-[13px] font-semibold">Recent activity</p>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">Latest completed generations</p>
+        </div>
+        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close notifications"><X className="size-4" /></Button>
+      </div>
+      <div className="max-h-72 divide-y overflow-auto">
+        {generations.slice(0, 5).map((generation) => (
+          <Link key={generation.id} href={`/text-to-speech/${generation.id}`} className="block px-4 py-3 hover:bg-accent/60" onClick={onClose}>
+            <p className="truncate text-[11px] font-semibold">{generation.text}</p>
+            <p className="mt-1 text-[10px] text-muted-foreground">{generation.voiceName} · {timeAgo(generation.createdAt)}</p>
+          </Link>
+        ))}
+        {!generations.length && <p className="px-4 py-8 text-center text-[11px] text-muted-foreground">No activity yet.</p>}
+      </div>
+    </div>
+  );
+}
+
 function UsageOverview({ generations, usagePercent }: { generations: Generation[]; usagePercent: number }) {
   const data = useMemo(() => {
     const totals = new Map<string, number>();
@@ -369,6 +398,7 @@ export function DashboardView({ billingView }: { billingView: boolean }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   const [greeting, setGreeting] = useState("Welcome back");
+  const firstName = capitalizeName(user?.firstName);
 
   useEffect(() => {
     const updateGreeting = () => setGreeting(greetingForHour(new Date().getHours()));
@@ -419,58 +449,64 @@ export function DashboardView({ billingView }: { billingView: boolean }) {
     <div className="min-h-full bg-[#f7f8fc]">
       <VoiceCreateDialog open={voiceDialogOpen} onOpenChange={setVoiceDialogOpen} />
 
-      <header className="mx-auto flex min-h-[104px] w-full max-w-[1600px] items-center justify-between gap-5 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="flex min-w-0 items-center gap-3">
-          <SidebarTrigger className="size-9 shrink-0 rounded-lg border bg-white md:hidden" />
-          <div className="min-w-0">
-            <h1 className="flex flex-wrap items-center gap-2 text-[22px] font-bold leading-tight text-[#111323] sm:text-[24px]">
-              <span>{billingView ? "Billing & usage" : `${greeting}${user?.firstName ? `, ${user.firstName}` : ""}`}</span>
-              {!billingView && <span role="img" aria-label="Waving hand" className="text-[22px]">👋</span>}
-            </h1>
-            <p className="mt-1.5 text-[12px] text-[#69758d] sm:text-[13px]">
-              {billingView ? "Manage your plan and character allowance." : "Create lifelike voices in seconds with the power of AI."}
-            </p>
+      <header className="mx-auto w-full max-w-[1600px] px-4 pb-5 pt-4 sm:px-6 sm:py-6 lg:px-8">
+        <div className="mb-5 flex items-center justify-between md:hidden">
+          <Link href="/" className="flex min-w-0 items-center gap-2.5" aria-label="Sonicra dashboard">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-[0_7px_18px_rgba(109,93,252,0.22)]">
+              <AudioWaveform className="size-[18px]" strokeWidth={2.2} />
+            </span>
+            <span className="text-[18px] font-bold text-[#111323]">Sonicra</span>
+          </Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <SidebarTrigger className="size-9 rounded-lg border bg-white shadow-[0_4px_14px_rgba(61,72,120,0.04)]" />
+            <div className="relative">
+              <Button variant="outline" size="icon" className="relative size-9 rounded-full border-[#e2e6ef] bg-white text-[#22283a] shadow-[0_4px_14px_rgba(61,72,120,0.04)]" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications">
+                <Bell className="size-4" />
+                {generations.length > 0 && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />}
+              </Button>
+              {notificationsOpen && <ActivityPopover generations={generations} onClose={() => setNotificationsOpen(false)} />}
+            </div>
+            <UserButton appearance={{ elements: { avatarBox: "size-9! ring-2! ring-white! shadow-sm!" } }} />
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-          <Button variant="outline" className="hidden h-10 rounded-xl border-[#d9d4ff] bg-white px-4 text-[12px] font-semibold text-[#5b46e5] shadow-[0_5px_16px_rgba(61,72,120,0.035)] hover:border-[#c9c1ff] hover:bg-[#f5f3ff] sm:flex" onClick={managePlan} disabled={checkoutPending || portalMutation.isPending}>
-            <Star className="size-4 fill-current" />
-            {billing?.hasActiveSubscription ? "Manage plan" : "Upgrade plan"}
-          </Button>
-          <div className="relative">
-            <Button variant="outline" size="icon" className="size-10 rounded-full border-[#e2e6ef] bg-white text-[#22283a] shadow-[0_5px_16px_rgba(61,72,120,0.035)] hover:border-[#d9d4ff] hover:bg-[#f5f3ff] hover:text-[#5b46e5]" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications">
-              <Bell className="size-4" />
-              {generations.length > 0 && <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary" />}
-            </Button>
-            {notificationsOpen && (
-              <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
-                <div className="flex items-center justify-between border-b px-4 py-3">
-                  <div>
-                    <p className="text-[13px] font-semibold">Recent activity</p>
-                    <p className="mt-0.5 text-[10px] text-muted-foreground">Latest completed generations</p>
-                  </div>
-                  <Button variant="ghost" size="icon-sm" onClick={() => setNotificationsOpen(false)} aria-label="Close notifications"><X className="size-4" /></Button>
-                </div>
-                <div className="max-h-72 divide-y overflow-auto">
-                  {generations.slice(0, 5).map((generation) => (
-                    <Link key={generation.id} href={`/text-to-speech/${generation.id}`} className="block px-4 py-3 hover:bg-accent/60" onClick={() => setNotificationsOpen(false)}>
-                      <p className="truncate text-[11px] font-semibold">{generation.text}</p>
-                      <p className="mt-1 text-[10px] text-muted-foreground">{generation.voiceName} · {timeAgo(generation.createdAt)}</p>
-                    </Link>
-                  ))}
-                  {!generations.length && <p className="px-4 py-8 text-center text-[11px] text-muted-foreground">No activity yet.</p>}
-                </div>
-              </div>
-            )}
+        <div className="flex items-start justify-between gap-5">
+          <div className="min-w-0">
+            <h1 className="text-[23px] font-bold leading-[1.2] text-[#111323] sm:text-[24px]">
+              {billingView ? (
+                "Billing & usage"
+              ) : (
+                <>
+                  {greeting}{firstName ? `, ${firstName}` : ""}{" "}
+                  <span role="img" aria-label="Waving hand" className="inline-block">👋</span>
+                </>
+              )}
+            </h1>
+            <p className="mt-1.5 max-w-xl text-[12px] leading-5 text-[#69758d] sm:text-[13px]">
+              {billingView ? "Manage your plan and character allowance." : "Create lifelike voices in seconds with the power of AI."}
+            </p>
           </div>
-          <div className="flex items-center gap-2.5 border-l border-[#e3e6ee] pl-3.5">
-            <UserButton appearance={{ elements: { avatarBox: "size-10! ring-2! ring-white! shadow-sm!" } }} />
-            <div className="hidden min-w-0 lg:block">
-              <p className="max-w-28 truncate text-[12px] font-semibold text-[#151827]">{user?.firstName ?? "Account"}</p>
-              <p className="mt-0.5 text-[9px] text-[#7a8499]">{billing?.hasActiveSubscription ? "Pro Plan" : "Free Plan"}</p>
+
+          <div className="hidden shrink-0 items-center gap-2 sm:gap-3 md:flex">
+            <Button variant="outline" className="hidden h-10 rounded-xl border-[#d9d4ff] bg-white px-4 text-[12px] font-semibold text-[#5b46e5] shadow-[0_5px_16px_rgba(61,72,120,0.035)] hover:border-[#c9c1ff] hover:bg-[#f5f3ff] sm:flex" onClick={managePlan} disabled={checkoutPending || portalMutation.isPending}>
+              <Star className="size-4 fill-current" />
+              {billing?.hasActiveSubscription ? "Manage plan" : "Upgrade plan"}
+            </Button>
+            <div className="relative">
+              <Button variant="outline" size="icon" className="size-10 rounded-full border-[#e2e6ef] bg-white text-[#22283a] shadow-[0_5px_16px_rgba(61,72,120,0.035)] hover:border-[#d9d4ff] hover:bg-[#f5f3ff] hover:text-[#5b46e5]" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications">
+                <Bell className="size-4" />
+                {generations.length > 0 && <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary" />}
+              </Button>
+              {notificationsOpen && <ActivityPopover generations={generations} onClose={() => setNotificationsOpen(false)} />}
             </div>
-            <ChevronDown className="hidden size-3.5 text-[#667085] lg:block" />
+            <div className="flex items-center gap-2.5 border-l border-[#e3e6ee] pl-3.5">
+              <UserButton appearance={{ elements: { avatarBox: "size-10! ring-2! ring-white! shadow-sm!" } }} />
+              <div className="hidden min-w-0 lg:block">
+                <p className="max-w-28 truncate text-[12px] font-semibold text-[#151827]">{firstName || "Account"}</p>
+                <p className="mt-0.5 text-[9px] text-[#7a8499]">{billing?.hasActiveSubscription ? "Pro Plan" : "Free Plan"}</p>
+              </div>
+              <ChevronDown className="hidden size-3.5 text-[#667085] lg:block" />
+            </div>
           </div>
         </div>
       </header>
@@ -504,7 +540,7 @@ export function DashboardView({ billingView }: { billingView: boolean }) {
           </div>
         ) : (
           <div className="space-y-5">
-            <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <MetricCard label="Voices generated" value={generations.length.toLocaleString()} delta={comparison.generations} detail="vs previous 7 days" icon={AudioLines} iconClassName="bg-[#efecff] text-[#6755f5]" />
               <MetricCard label="Characters generated" value={compactNumber(totalCharacters)} delta={comparison.characters} detail="vs previous 7 days" icon={BookOpenText} iconClassName="bg-[#edf4ff] text-[#2876f3]" />
               <MetricCard label="Voices available" value={allVoices.length.toLocaleString()} detail={`${voiceGroups?.custom.length ?? 0} custom · ${voiceGroups?.system.length ?? 0} built-in`} icon={Library} iconClassName="bg-[#fff3e8] text-[#f07a22]" />
